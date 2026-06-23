@@ -60,13 +60,19 @@ export async function callAdmin(action, data = {}) {
 
 function normalizeCloudbaseError(err) {
   const rawMessage = errorMessage(err);
+  const context = cloudbaseContext();
   if (/scope|anonymous|auth|login/i.test(rawMessage)) {
-    return new Error("CloudBase Web 登录未就绪：请在云开发环境开启匿名登录，并把当前访问来源加入 Web 安全域名/安全来源。");
+    return new Error(`CloudBase Web 登录未就绪：请检查匿名登录、Web 安全来源和环境 ID。\n${context}\n原始错误：${rawMessage}`);
   }
   if (/cors|origin|domain|403|forbidden/i.test(rawMessage)) {
-    return new Error("CloudBase 拒绝当前网页来源：请把 http://124.222.88.31:8088 加入云开发 Web 安全域名/安全来源。");
+    return new Error(`CloudBase 拒绝当前网页来源：请把当前 Origin 加入云开发 Web 安全域名/安全来源。\n${context}\n原始错误：${rawMessage}`);
   }
-  return err instanceof Error ? err : new Error(rawMessage || "CloudBase 调用失败");
+  return new Error(`CloudBase 调用失败。\n${context}\n原始错误：${rawMessage || "未知错误"}`);
+}
+
+function cloudbaseContext() {
+  const origin = typeof window !== "undefined" && window.location ? window.location.origin : "";
+  return `当前 Origin：${origin || "-"}\n当前 CloudBase env：${env}\n当前云函数：${functionName}`;
 }
 
 function errorMessage(err) {
