@@ -13,11 +13,15 @@ function getApp() {
 }
 
 async function ensureAuth() {
-  const auth = getApp().auth({ persistence: "local" });
-  const state = await auth.getLoginState();
-  if (state) return;
-  if (!signInPromise) signInPromise = auth.anonymousAuthProvider().signIn();
-  await signInPromise;
+  try {
+    const auth = getApp().auth({ persistence: "local" });
+    const state = await auth.getLoginState();
+    if (state) return;
+    if (!signInPromise) signInPromise = auth.anonymousAuthProvider().signIn();
+    await signInPromise;
+  } catch (err) {
+    throw normalizeCloudbaseError(err);
+  }
 }
 
 function getToken() {
@@ -37,17 +41,32 @@ export async function callAdmin(action, data = {}) {
   const adminWebToken = getToken();
   if (!adminWebToken) throw new Error("请先填写后台访问令牌");
   await ensureAuth();
-  const result = await getApp().callFunction({
-    name: functionName,
-    data: { action, adminWebToken, ...data },
-  });
-  const payload = result.result || result;
-  if (!payload || !payload.success) {
-    const error = new Error((payload && payload.message) || "后台服务暂时不可用");
-    error.code = payload && payload.code;
-    throw error;
+  try {
+    const result = await getApp().callFunction({
+      name: functionName,
+      data: { action, adminWebToken, ...data },
+    });
+    const payload = result.result || result;
+    if (!payload || !payload.success) {
+      const error = new Error((payload && payload.message) || "后台服务暂时不可用");
+      error.code = payload && payload.code;
+      throw error;
+    }
+    return payload;
+  } catch (err) {
+    throw normalizeCloudbaseError(err);
   }
-  return payload;
+}
+
+function normalizeCloudbaseError(err) {
+  const rawMessage = String((err && err.message) || err || "");
+  if (/scope|anonymous|auth|login/i.test(rawMessage)) {
+    return new Error("CloudBase Web 登录未就绪：请在云开发环境开启匿名登录，并把当前访问来源加入 Web 安全域名/安全来源。");
+  }
+  if (/cors|origin|domain|403|forbidden/i.test(rawMessage)) {
+    return new Error("CloudBase 拒绝当前网页来源：请把 http://124.222.88.31:8088 加入云开发 Web 安全域名/安全来源。");
+  }
+  return err instanceof Error ? err : new Error(rawMessage || "CloudBase 调用失败");
 }
 
 const now = new Date().toISOString();
