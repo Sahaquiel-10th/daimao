@@ -36,9 +36,13 @@ npm run dev
 ```text
 VITE_CLOUDBASE_ENV=cloud1-8gocbg40af3862ce
 VITE_CLOUDBASE_FUNCTION=daimaoBusiness
+VITE_CLOUDBASE_REGION=ap-shanghai
+VITE_CLOUDBASE_ACCESS_KEY=可选，CloudBase Publishable Key
 VITE_ADMIN_WEB_TOKEN=与云函数 ADMIN_WEB_TOKEN 相同
 VITE_ADMIN_USE_MOCK=false
 ```
+
+如果 IP 访问时 CloudBase 匿名登录报 `Failed to fetch`，可以在 CloudBase 控制台的 `环境管理 -> API Key 配置` 创建或复制 `Publishable Key`，在登录页的 `CloudBase Publishable Key` 填入。它是浏览器侧公开访问 Key，不等同于后台访问令牌；真正的管理权限仍由云函数环境变量 `ADMIN_WEB_TOKEN` 校验。
 
 只看界面可设为：
 

@@ -10,7 +10,7 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
-import { callAdmin, hasToken, saveToken } from "./api";
+import { callAdmin, hasToken, saveAccessKey, saveToken } from "./api";
 
 const tabs = [
   { key: "overview", label: "概览", icon: Activity },
@@ -82,6 +82,7 @@ function Field({ label, children }) {
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
   const [tokenInput, setTokenInput] = useState("");
+  const [accessKeyInput, setAccessKeyInput] = useState("");
   const [authed, setAuthed] = useState(hasToken());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -145,7 +146,18 @@ export default function App() {
   function login(event) {
     event.preventDefault();
     saveToken(tokenInput.trim());
+    saveAccessKey(accessKeyInput.trim());
     setAuthed(true);
+  }
+
+  function resetCredentials() {
+    saveToken("");
+    saveAccessKey("");
+    setTokenInput("");
+    setAccessKeyInput("");
+    setAuthed(false);
+    setData(null);
+    setError("");
   }
 
   if (!authed) {
@@ -163,6 +175,14 @@ export default function App() {
               onChange={(event) => setTokenInput(event.target.value)}
               placeholder="ADMIN_WEB_TOKEN"
               autoFocus
+            />
+          </Field>
+          <Field label="CloudBase Publishable Key">
+            <input
+              type="password"
+              value={accessKeyInput}
+              onChange={(event) => setAccessKeyInput(event.target.value)}
+              placeholder="匿名登录失败时填写，可选"
             />
           </Field>
           <button className="primary-button" type="submit">
@@ -216,7 +236,14 @@ export default function App() {
           </div>
         </header>
 
-        {error && <div className="notice">{error}</div>}
+        {error && (
+          <div className="notice">
+            <pre>{error}</pre>
+            <button type="button" onClick={resetCredentials}>
+              重新配置
+            </button>
+          </div>
+        )}
         {loading && !data && <div className="loading">正在加载后台数据...</div>}
 
         {activeTab === "overview" && (

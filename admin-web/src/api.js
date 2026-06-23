@@ -7,13 +7,20 @@ const mockEnabled = import.meta.env.VITE_ADMIN_USE_MOCK === "true";
 
 let app;
 let signInPromise;
+let appAccessKey;
 
 function getApp() {
-  if (!app) app = cloudbase.init({ env, region });
+  const accessKey = getAccessKey();
+  if (!app || appAccessKey !== accessKey) {
+    appAccessKey = accessKey;
+    app = cloudbase.init(accessKey ? { env, region, accessKey } : { env, region });
+    signInPromise = null;
+  }
   return app;
 }
 
 async function ensureAuth() {
+  if (getAccessKey()) return;
   let stage = "检查登录态";
   try {
     const auth = getApp().auth({ persistence: "local" });
@@ -49,8 +56,19 @@ function getToken() {
   return localStorage.getItem("daimao_admin_web_token") || import.meta.env.VITE_ADMIN_WEB_TOKEN || "";
 }
 
+function getAccessKey() {
+  return localStorage.getItem("daimao_cloudbase_access_key") || import.meta.env.VITE_CLOUDBASE_ACCESS_KEY || "";
+}
+
 export function saveToken(token) {
   localStorage.setItem("daimao_admin_web_token", token || "");
+}
+
+export function saveAccessKey(accessKey) {
+  localStorage.setItem("daimao_cloudbase_access_key", accessKey || "");
+  app = null;
+  appAccessKey = "";
+  signInPromise = null;
 }
 
 export function hasToken() {

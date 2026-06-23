@@ -389,6 +389,12 @@ th {
   margin-bottom: 14px;
 }
 
+.notice pre {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  font: inherit;
+}
+
 .loading {
   border-color: #d8dfdc;
   background: #ffffff;
