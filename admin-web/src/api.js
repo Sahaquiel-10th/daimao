@@ -17,11 +17,23 @@ async function ensureAuth() {
     const auth = getApp().auth({ persistence: "local" });
     const state = await auth.getLoginState();
     if (state) return;
-    if (!signInPromise) signInPromise = auth.anonymousAuthProvider().signIn();
+    if (!signInPromise) signInPromise = signInAnonymously(auth);
     await signInPromise;
+    const signedInState = await auth.getLoginState();
+    if (!signedInState) throw new Error("匿名登录后仍未获取到 CloudBase 登录态");
   } catch (err) {
+    signInPromise = null;
     throw normalizeCloudbaseError(err);
   }
+}
+
+async function signInAnonymously(auth) {
+  if (typeof auth.signInAnonymously === "function") {
+    const result = await auth.signInAnonymously();
+    if (result && result.error) throw result.error;
+    return result;
+  }
+  return auth.anonymousAuthProvider().signIn();
 }
 
 function getToken() {
