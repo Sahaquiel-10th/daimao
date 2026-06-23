@@ -1,13 +1,6 @@
 name: Deploy Admin Web
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "admin-web/**"
-      - "deploy/nginx/daimao-admin.conf"
-      - ".github/workflows/deploy-admin-web.yml"
   workflow_dispatch:
 
 jobs:
