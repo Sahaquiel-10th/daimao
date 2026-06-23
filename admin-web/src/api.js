@@ -59,7 +59,7 @@ export async function callAdmin(action, data = {}) {
 }
 
 function normalizeCloudbaseError(err) {
-  const rawMessage = String((err && err.message) || err || "");
+  const rawMessage = errorMessage(err);
   if (/scope|anonymous|auth|login/i.test(rawMessage)) {
     return new Error("CloudBase Web 登录未就绪：请在云开发环境开启匿名登录，并把当前访问来源加入 Web 安全域名/安全来源。");
   }
@@ -67,6 +67,27 @@ function normalizeCloudbaseError(err) {
     return new Error("CloudBase 拒绝当前网页来源：请把 http://124.222.88.31:8088 加入云开发 Web 安全域名/安全来源。");
   }
   return err instanceof Error ? err : new Error(rawMessage || "CloudBase 调用失败");
+}
+
+function errorMessage(err) {
+  if (!err) return "";
+  if (typeof err === "string") return err;
+  if (err.message && typeof err.message === "string") return err.message;
+  if (err.msg && typeof err.msg === "string") return err.msg;
+  if (err.error && typeof err.error === "string") return err.error;
+  if (err.error_description && typeof err.error_description === "string") return err.error_description;
+  if (err.code || err.requestId || err.requestID) {
+    return JSON.stringify({
+      code: err.code,
+      message: err.message || err.msg,
+      requestId: err.requestId || err.requestID,
+    });
+  }
+  try {
+    return JSON.stringify(err);
+  } catch (jsonErr) {
+    return String(err);
+  }
 }
 
 const now = new Date().toISOString();
