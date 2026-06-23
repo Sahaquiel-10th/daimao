@@ -1,0 +1,359 @@
+<view class="page-shell">
+  <block wx:if="{{mode === 'onboarding'}}">
+    <view class="brand-row">
+      <view class="brand-mark">呆</view>
+      <view>
+        <view class="brand-title">呆猫</view>
+        <view class="brand-subtitle">把线下介绍，变成一张好看的名片</view>
+      </view>
+    </view>
+
+    <view class="chat-panel">
+      <view class="chat-guide">
+        <view class="cat-speech">轻松写就好，后面还能改</view>
+        <image wx:if="{{chatCatSrc}}" class="chat-cat" src="{{chatCatSrc}}" mode="aspectFit" />
+      </view>
+      <view class="progress-line">
+        <view class="progress-bar" style="width: {{progressWidth}}%"></view>
+      </view>
+
+      <view class="bubble bot">{{questionFlow[currentStep]}}</view>
+      <view class="chat-input-wrap">
+        <textarea class="chat-input" value="{{currentAnswer}}" bindinput="onAnswerInput" maxlength="{{currentStep === 2 ? 50 : 120}}" placeholder="在这里回复呆猫..." />
+        <view class="chat-input-note">{{currentStep === 2 ? '最多50个字' : '*这里填写的内容，都是你呆猫名片的一部分'}}</view>
+      </view>
+      <view class="chat-actions {{currentStep >= 3 ? 'two' : ''}}">
+        <button wx:if="{{currentStep >= 3}}" hover-class="button-press" class="secondary-button" bindtap="changeQuestion">换个问题</button>
+        <button hover-class="button-press" class="primary-button" bindtap="nextQuestion">继续</button>
+      </view>
+    </view>
+  </block>
+
+  <block wx:elif="{{mode === 'home'}}">
+    <view class="topbar">
+      <view>
+        <view class="eyebrow">DAIMAO FRIENDS</view>
+        <view class="screen-title">{{activeTab === 'history' ? '我的猫友' : '我的名片'}}</view>
+      </view>
+    </view>
+
+    <view class="platform-entry" bindtap="openPlatform">
+      <view>
+        <view class="platform-kicker">DAIMAO 2.0 · OPC 攒局平台</view>
+        <view class="platform-title">去围观项目，让秘书带你入局</view>
+        <view class="platform-copy">项目进度 · 官方开局 · AI 秘书 · 协作空间</view>
+      </view>
+      <view class="platform-arrow">›</view>
+    </view>
+
+    <view class="tabbar">
+      <view class="tab {{activeTab === 'history' ? 'active' : ''}}" data-tab="history" bindtap="switchTab">我的猫友</view>
+      <view class="tab {{activeTab === 'me' ? 'active' : ''}}" data-tab="me" bindtap="switchTab">关于自己</view>
+    </view>
+
+    <block wx:if="{{activeTab === 'history'}}">
+      <view wx:if="{{!catFriendsEnabled}}" class="cat-friends-consent">
+        <view class="empty-title">启用“我的猫友”</view>
+        <view class="empty-text">线下碰过彼此贴纸、并已创建名片的用户，会互相出现在猫友列表中；未注册的人会先折叠起来。</view>
+        <view class="agreement-check">
+          <checkbox class="agreement-checkbox" checked="{{agreementAccepted}}" bindtap="toggleAgreement" />
+          <view class="agreement-text">
+            <text bindtap="toggleAgreement">我已阅读并同意更新后的</text>
+            <text class="agreement-link" data-type="service" catchtap="openAgreement">《用户服务协议》</text>
+            <text>和</text>
+            <text class="agreement-link" data-type="privacy" catchtap="openAgreement">《隐私政策》</text>
+          </view>
+        </view>
+        <button class="primary-button" loading="{{catFriendsLoading}}" bindtap="enableCatFriends">开启我的猫友</button>
+      </view>
+      <block wx:else>
+      <view wx:if="{{catFriendsError}}" class="cat-friends-error-state">
+        <view class="cat-friends-error">{{catFriendsError}}</view>
+        <button class="secondary-button" bindtap="loadCatFriends">重新加载</button>
+      </view>
+      <view wx:elif="{{metHistory.length > 0}}" class="search-box">
+        <input value="{{historySearch}}" bindinput="onHistorySearch" placeholder="搜名字、工作或标签" />
+        <view wx:if="{{historySearch}}" class="search-clear" bindtap="clearHistorySearch">清空</view>
+      </view>
+      <view wx:if="{{!catFriendsError && catFriendsLoading && metHistory.length === 0}}" class="empty-state compact">
+        <view class="empty-title">正在找回猫友...</view>
+      </view>
+      <view wx:elif="{{!catFriendsError && metHistory.length === 0}}" class="empty-state">
+        <image wx:if="{{emptySrc}}" src="{{emptySrc}}" mode="aspectFit" />
+        <view class="empty-title">还没有猫友</view>
+        <view class="empty-text">已注册的猫友会显示在这里。碰过你但还没注册的人，先收在下面的小按钮里。</view>
+        <view class="demo-link" bindtap="openDemoCard">查看示例名片</view>
+      </view>
+      <view wx:if="{{!catFriendsError && anonymousMetHistory.length > 0}}" class="anonymous-fold">
+        <view class="anonymous-fold-main" bindtap="toggleAnonymousFriends">
+          <image src="/images/daimao2/pending-reply.png" mode="aspectFit" />
+          <view>
+            <view class="anonymous-title">{{anonymousMetHistory.length}} 个碰过你但还没注册的人</view>
+            <view class="anonymous-copy">有人保存名片后，秘书会提醒你，并拉进猫友列表。</view>
+          </view>
+          <view class="anonymous-arrow">{{showAnonymousFriends ? '⌃' : '⌄'}}</view>
+        </view>
+        <view wx:if="{{showAnonymousFriends}}" class="anonymous-list">
+          <view wx:for="{{anonymousMetHistory}}" wx:key="id" class="anonymous-row">
+            <view>
+              <view class="history-name anonymous-name">还没留下名片</view>
+              <view class="history-time">{{item.metAt}}</view>
+            </view>
+            <button
+              class="remind-button {{item.reminderStatus}}"
+              data-connection-id="{{item.connectionId}}"
+              data-reminder-status="{{item.reminderStatus}}"
+              loading="{{remindingConnectionId === item.connectionId}}"
+              catchtap="remindAnonymousFriend"
+            >{{item.reminderStatus === 'sent' ? '已提醒' : item.reminderStatus === 'available' ? '提醒填写' : '等授权'}}</button>
+          </view>
+        </view>
+      </view>
+      <view wx:if="{{!catFriendsError && metHistory.length > 0 && filteredMetHistory.length === 0}}" class="empty-state compact">
+        <view class="empty-title">没找到这张名片</view>
+        <view class="empty-text">换个名字、工作或标签试试看。</view>
+      </view>
+      <view wx:if="{{!catFriendsError && filteredMetHistory.length > 0}}" class="history-list">
+        <view wx:for="{{filteredMetHistory}}" wx:key="id" class="history-item {{item.anonymous ? 'anonymous' : ''}}" data-id="{{item.id}}" bindtap="previewMet">
+          <image wx:if="{{item.avatar}}" class="history-avatar" src="{{item.avatar}}" mode="aspectFill" />
+          <view class="history-main">
+            <block wx:if="{{item.anonymous}}">
+              <view class="history-name anonymous-name">还没留下名片</view>
+              <view class="history-job">碰过你的呆猫贴纸</view>
+              <view class="history-time">{{item.metAt}}</view>
+            </block>
+            <block wx:else>
+              <view class="history-name">{{item.name}}<text wx:if="{{item.newFriend || item.isNew}}" class="new-badge">NEW</text></view>
+              <view class="history-job">{{item.job}}</view>
+              <view class="history-tags">
+              <text wx:for="{{item.tags}}" wx:for-item="tag" wx:for-index="tagIndex" wx:key="*this">{{tag}}{{tagIndex < item.tags.length - 1 ? ' · ' : ''}}</text>
+              <text wx:if="{{!item.tags || !item.tags.length}}">还没有标签</text>
+              </view>
+              <view class="history-time">{{item.metAt}}</view>
+            </block>
+          </view>
+          <button
+            wx:if="{{item.anonymous}}"
+            class="remind-button {{item.reminderStatus}}"
+            data-connection-id="{{item.connectionId}}"
+            data-reminder-status="{{item.reminderStatus}}"
+            loading="{{remindingConnectionId === item.connectionId}}"
+            catchtap="remindAnonymousFriend"
+          >{{item.reminderStatus === 'sent' ? '已提醒' : item.reminderStatus === 'available' ? '提醒填写' : '等授权'}}</button>
+          <view wx:else class="arrow">›</view>
+        </view>
+      </view>
+      </block>
+    </block>
+
+    <block wx:else>
+      <view class="mini-card">
+        <view class="avatar-wrap mini-avatar-wrap">
+          <image wx:if="{{profile.avatar}}" class="mini-avatar" src="{{profile.avatar}}" mode="aspectFill" />
+        </view>
+        <view class="mini-info">
+          <view class="mini-name">{{profile.name}}</view>
+          <view class="mini-job">{{profile.job}}</view>
+          <view class="mini-intro">{{profile.intro}}</view>
+        </view>
+      </view>
+      <view class="info-grid">
+        <view class="info-cell">
+          <view class="label">微信号</view>
+          <view class="value">{{profile.wechat}}</view>
+        </view>
+      </view>
+      <view class="me-actions">
+        <button hover-class="button-press" class="secondary-button" bindtap="previewMyCard">预览我的名片</button>
+        <button hover-class="button-press" class="primary-button" bindtap="openEditor">编辑我的名片</button>
+      </view>
+      <view class="legal-list">
+        <view class="legal-item" data-type="service" bindtap="openAgreement">用户服务协议<text>›</text></view>
+        <view class="legal-item" data-type="privacy" bindtap="openAgreement">隐私政策<text>›</text></view>
+      </view>
+      <view class="sticker-cta">
+        <button hover-class="button-press" class="sticker-button" bindtap="requestSticker">我也想要呆猫贴</button>
+        <image wx:if="{{stickerCat.src}}" class="sticker-cta-cat {{stickerCat.pose}}" src="{{stickerCat.src}}" mode="aspectFit" />
+      </view>
+    </block>
+
+    <view class="dm-bottom-nav card-bottom-nav">
+      <view class="dm-nav-item" data-target="innings" bindtap="goMainNav"><image class="dm-nav-icon" src="{{navIcons.innings}}" />开局</view>
+      <view class="dm-nav-item active"><image class="dm-nav-icon" src="{{navIcons.friends}}" />猫友</view>
+      <view class="dm-nav-item primary-nav" data-target="watch" bindtap="goMainNav"><image class="dm-nav-icon" src="{{navIcons.watch}}" />围观</view>
+      <view class="dm-nav-item" data-target="me" bindtap="goMainNav"><image class="dm-nav-icon" src="{{navIcons.me}}" />我的</view>
+    </view>
+  </block>
+
+  <block wx:elif="{{mode === 'edit'}}">
+    <view class="edit-head">
+      <view>
+        <view class="eyebrow">PROFILE</view>
+        <view class="screen-title">编辑名片</view>
+      </view>
+      <view class="text-button" bindtap="backHome">返回</view>
+    </view>
+
+    <view class="edit-card">
+      <view class="avatar-picker">
+        <image wx:if="{{profile.avatar}}" class="edit-avatar" src="{{profile.avatar}}" mode="aspectFill" />
+        <image wx:if="{{editAvatarCat.src}}" class="avatar-companion edit-companion {{editAvatarCat.pose}}" src="{{editAvatarCat.src}}" mode="aspectFit" />
+      </view>
+      <view class="avatar-actions">
+        <button hover-class="button-press" class="avatar-upload-button" bindtap="chooseAvatar">上传真人头像</button>
+        <button hover-class="button-press" class="avatar-wechat-button" open-type="chooseAvatar" bindchooseavatar="onChooseWechatAvatar">使用微信头像</button>
+      </view>
+
+      <view class="field">
+        <view class="label">怎么称呼你</view>
+        <input value="{{profile.name}}" data-field="name" bindinput="onFieldInput" placeholder="比如：小葵" />
+      </view>
+      <view class="field">
+        <view class="label">工作 / 身份</view>
+        <input value="{{profile.job}}" data-field="job" bindinput="onFieldInput" placeholder="比如：咖啡店主理人" />
+      </view>
+      <view class="field">
+        <view class="label">微信号</view>
+        <input value="{{profile.wechat}}" data-field="wechat" bindinput="onFieldInput" placeholder="必填，用于一键复制" />
+      </view>
+      <view class="field">
+        <view class="label">一句介绍</view>
+        <textarea value="{{profile.intro}}" data-field="intro" bindinput="onFieldInput" maxlength="50" placeholder="用一句话介绍你自己，最多50个字" />
+      </view>
+      <view class="question-edit-row">
+        <view>
+          <view class="label">名片问答</view>
+          <view class="question-edit-copy">保留喜欢的回答，也可以单独换题</view>
+        </view>
+        <button class="question-edit-button" bindtap="openQuestionEditor">重新回答</button>
+      </view>
+      <view class="field">
+        <view class="label">关键词</view>
+        <input value="{{tagText}}" bindinput="onTagInput" placeholder="咖啡、摄影、Citywalk" />
+      </view>
+      <view wx:if="{{!agreementAccepted}}" class="agreement-check edit-agreement">
+        <checkbox class="agreement-checkbox" checked="{{agreementAccepted}}" bindtap="toggleAgreement" />
+        <view class="agreement-text">
+          <text bindtap="toggleAgreement">我已阅读并同意</text>
+          <text class="agreement-link" data-type="service" catchtap="openAgreement">《用户服务协议》</text>
+          <text>和</text>
+          <text class="agreement-link" data-type="privacy" catchtap="openAgreement">《隐私政策》</text>
+        </view>
+      </view>
+      <button class="primary-button" bindtap="saveProfile">保存名片</button>
+    </view>
+  </block>
+
+  <block wx:elif="{{mode === 'questions'}}">
+    <view class="edit-head">
+      <view>
+        <view class="eyebrow">PROFILE QUESTIONS</view>
+        <view class="screen-title">重新回答</view>
+      </view>
+      <view class="text-button" bindtap="cancelQuestionEditor">取消</view>
+    </view>
+    <view class="question-editor">
+      <view wx:for="{{questionDrafts}}" wx:key="q" class="question-draft">
+        <view class="question-draft-head">
+          <view class="question-number">0{{index + 1}}</view>
+          <button class="change-question-button" data-index="{{index}}" bindtap="changeDraftQuestion">换个问题</button>
+        </view>
+        <view class="question-draft-title">{{item.q}}</view>
+        <textarea class="question-draft-input" value="{{item.a}}" data-index="{{index}}" bindinput="onQuestionDraftInput" maxlength="120" placeholder="写下你的回答" />
+      </view>
+      <button class="primary-button" bindtap="saveQuestionDrafts">完成这三个回答</button>
+    </view>
+  </block>
+
+  <block wx:elif="{{mode === 'card'}}">
+    <view class="card-screen">
+      <view class="card-actions-top">
+        <view class="back-button" bindtap="closeCard">‹ 返回</view>
+      </view>
+      <view class="profile-card">
+        <view class="avatar-stage">
+          <view class="avatar-frame">
+            <image wx:if="{{cardProfile.avatar}}" class="card-avatar" src="{{cardProfile.avatar}}" mode="aspectFill" />
+          </view>
+          <image wx:if="{{cardAvatarCat.src}}" class="avatar-companion card-companion {{cardAvatarCat.pose}}" src="{{cardAvatarCat.src}}" mode="aspectFit" />
+        </view>
+        <view class="card-name">{{cardProfile.name}}</view>
+        <view class="card-job">{{cardProfile.job}}</view>
+        <view class="card-intro">{{cardProfile.intro}}</view>
+
+        <view class="tag-row">
+          <view wx:for="{{cardProfile.tags}}" wx:key="*this" class="tag">{{item}}</view>
+        </view>
+
+        <view class="qa-list">
+          <block wx:for="{{cardProfile.answers}}" wx:key="q">
+            <view wx:if="{{index < 3}}" class="qa-item">
+              <view class="qa-q">{{item.q}}</view>
+              <view class="qa-a">{{item.a}}</view>
+            </view>
+          </block>
+        </view>
+
+        <view class="wechat-line">
+          <view>
+            <view class="label">微信号</view>
+            <view class="wechat-id">{{cardProfile.wechat || '未填写'}}</view>
+          </view>
+          <button hover-class="button-press" class="copy-button" data-wechat="{{cardProfile.wechat}}" bindtap="copyWechat">复制</button>
+        </view>
+      </view>
+      <view wx:if="{{reminderSubscriptionStatus}}" class="reminder-subscription">
+        <block wx:if="{{reminderSubscriptionStatus === 'available' || reminderSubscriptionStatus === 'rejected'}}">
+          <view class="reminder-subscription-title">要是你还没来得及做名片</view>
+          <view class="reminder-subscription-copy">可以允许这位猫友提醒你一次。不开启也不影响查看和保存对方名片。</view>
+          <button
+            class="reminder-subscription-button"
+            loading="{{reminderSubscriptionLoading}}"
+            bindtap="subscribeToProfileReminder"
+          >允许提醒一次</button>
+          <view class="reminder-policy">
+            点击即表示你已了解
+            <text class="agreement-link" data-type="privacy" bindtap="openAgreement">《隐私政策》</text>
+            中的订阅提醒说明
+          </view>
+        </block>
+        <view wx:elif="{{reminderSubscriptionStatus === 'accepted'}}" class="reminder-subscription-done">已允许对方提醒一次</view>
+        <view wx:elif="{{reminderSubscriptionStatus === 'sent'}}" class="reminder-subscription-done">对方已经提醒过你填写名片</view>
+      </view>
+      <button wx:if="{{!cardIsMine}}" hover-class="button-press" class="claim-button" bindtap="startOwnCardFromCard">我也想领一只呆猫</button>
+
+      <view class="bottom-actions">
+        <button hover-class="button-press" class="secondary-button" loading="{{posterSaving}}" bindtap="savePoster">保存完整图</button>
+        <button hover-class="button-press" class="primary-button" open-type="share" data-share-card="1">分享呆猫名片</button>
+      </view>
+      <canvas type="2d" id="posterCanvas" class="poster-canvas"></canvas>
+    </view>
+  </block>
+
+  <view wx:if="{{showStickerContactModal}}" class="modal-mask" catchtouchmove="noop">
+    <view class="contact-modal">
+      <view class="modal-close" bindtap="closeStickerContact">×</view>
+      <image wx:if="{{modalStickerSrc}}" class="modal-sticker" src="{{modalStickerSrc}}" mode="aspectFill" />
+      <view class="modal-title">找作者领养呆猫贴</view>
+      <view class="modal-copy">呆猫贴还没量产，现在只能加微信找作者一对一领养。</view>
+      <image wx:if="{{contactQrSrc}}" class="modal-qr" src="{{contactQrSrc}}" mode="aspectFit" show-menu-by-longpress="true" />
+      <view class="modal-hint">长按二维码添加微信，要一张你的呆猫贴。</view>
+      <button hover-class="button-press" class="modal-button" bindtap="closeStickerContact">知道了</button>
+    </view>
+  </view>
+
+  <view wx:if="{{showOwnedCatModal}}" class="modal-mask" catchtouchmove="noop">
+    <view class="owned-modal">
+      <view class="modal-close" bindtap="closeOwnedCat">×</view>
+      <image wx:if="{{ownedCatSrc}}" class="owned-cat" src="{{ownedCatSrc}}" mode="aspectFit" />
+      <view class="modal-title">你已经有呆猫了</view>
+      <view class="modal-copy">别再领一只啦，原来的呆猫会趴着不理你。</view>
+      <button hover-class="button-press" class="modal-button" bindtap="closeOwnedCat">哄哄它</button>
+    </view>
+  </view>
+  <view class="secretary-float-tip">小秘书</view>
+  <view class="secretary-float" bindtap="openSecretary">
+    <image class="{{secretaryBubble.frame === 0 ? 'show' : ''}}" src="{{secretaryBubble.frames[0]}}" mode="aspectFit" />
+    <image class="{{secretaryBubble.frame === 1 ? 'show' : ''}}" src="{{secretaryBubble.frames[1]}}" mode="aspectFit" />
+  </view>
+</view>

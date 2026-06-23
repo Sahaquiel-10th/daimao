@@ -1,0 +1,39 @@
+page {
+  min-height: 100vh;
+  background: #faf7f1;
+  color: #23211f;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+}
+
+.agreement-page {
+  padding: 36rpx 34rpx 64rpx;
+}
+
+.agreement-title {
+  font-size: 42rpx;
+  line-height: 1.25;
+  font-weight: 900;
+}
+
+.agreement-date {
+  margin-top: 12rpx;
+  color: #78716a;
+  font-size: 24rpx;
+}
+
+.section {
+  margin-top: 34rpx;
+}
+
+.section-title {
+  font-size: 30rpx;
+  line-height: 1.35;
+  font-weight: 800;
+}
+
+.paragraph {
+  margin-top: 12rpx;
+  color: #4b4742;
+  font-size: 27rpx;
+  line-height: 1.75;
+}

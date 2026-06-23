@@ -1,0 +1,135 @@
+.detail-page {
+  padding-bottom: 60rpx;
+}
+
+.hero-card {
+  padding: 32rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 20rpx;
+  background: #f5ead8;
+  box-shadow: 7rpx 7rpx 0 #23211f;
+}
+
+.hero-title {
+  margin: 30rpx 0 18rpx;
+  font-size: 48rpx;
+  line-height: 1.2;
+  font-weight: 900;
+}
+
+.hero-description {
+  font-size: 29rpx;
+  line-height: 1.7;
+}
+
+.project-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin: -8rpx 0 18rpx;
+}
+
+.project-tags text {
+  padding: 7rpx 13rpx;
+  border: 2rpx solid #23211f;
+  border-radius: 999rpx;
+  background: #fffdfa;
+  color: #2d685f;
+  font-size: 22rpx;
+  font-weight: 900;
+}
+
+.hero-stars {
+  color: #95620e;
+  font-size: 28rpx;
+  font-weight: 900;
+}
+
+.goal-box {
+  margin-top: 26rpx;
+  padding: 22rpx;
+  border-left: 8rpx solid #9fcfc3;
+  background: #fffdfa;
+  font-size: 27rpx;
+  line-height: 1.55;
+}
+
+.goal-label {
+  margin-bottom: 8rpx;
+  color: #6f6a63;
+  font-size: 22rpx;
+  font-weight: 900;
+}
+
+.owner-line {
+  margin-top: 24rpx;
+  color: #746c64;
+  font-size: 23rpx;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18rpx;
+  margin: 30rpx 0 20rpx;
+}
+
+.principle {
+  padding: 20rpx 24rpx;
+  border: 2rpx dashed #81776e;
+  border-radius: 12rpx;
+  color: #655e57;
+  font-size: 23rpx;
+  line-height: 1.55;
+}
+
+.update-title {
+  margin: 22rpx 0 12rpx;
+  font-size: 31rpx;
+  font-weight: 900;
+}
+
+.update-content {
+  font-size: 27rpx;
+  line-height: 1.65;
+}
+
+.update-time {
+  color: #8b8178;
+  font-size: 20rpx;
+}
+
+.modal-mask {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(35, 33, 31, 0.58);
+}
+
+.meeting-sheet {
+  width: 100%;
+  max-height: 90vh;
+  padding: 32rpx 30rpx 50rpx;
+  overflow-y: auto;
+  border-top: 3rpx solid #23211f;
+  border-radius: 26rpx 26rpx 0 0;
+  background: #faf7f1;
+}
+
+.sheet-title {
+  font-size: 38rpx;
+  font-weight: 900;
+}
+
+.meeting-sheet .dm-field:first-of-type {
+  margin-top: 28rpx;
+}
+
+.dm-textarea.short {
+  min-height: 130rpx;
+}

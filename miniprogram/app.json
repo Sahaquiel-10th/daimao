@@ -1,0 +1,28 @@
+{
+  "pages": [
+    "pages/discover/index",
+    "pages/home/index",
+    "pages/innings/index",
+    "pages/me/index",
+    "pages/index/index",
+    "pages/project-detail/index",
+    "pages/project-edit/index",
+    "pages/project-space/index",
+    "pages/events/index",
+    "pages/secretary/index",
+    "pages/agent-profile/index",
+    "pages/tag-entry/index",
+    "pages/agreement/user-service",
+    "pages/agreement/privacy-policy"
+  ],
+  "window": {
+    "backgroundColor": "#FAF7F1",
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#FAF7F1",
+    "navigationBarTitleText": "呆猫 2.0",
+    "navigationBarTextStyle": "black"
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents"
+}

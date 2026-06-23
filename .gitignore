@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Dependencies
+node_modules/
+admin-web/node_modules/
+cloudfunctions/*/node_modules/
+
+# Build outputs
+dist/
+admin-web/dist/
+
+# Local environment
+.env
+.env.*
+!.env.example
+admin-web/.env
+admin-web/.env.*
+!admin-web/.env.example
+
+# WeChat DevTools local/private config
+project.private.config.json
+
+# Temporary files
+tmp/
+.cache/
+

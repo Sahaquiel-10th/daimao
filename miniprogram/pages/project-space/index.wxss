@@ -1,0 +1,196 @@
+.space-page {
+  padding-bottom: 60rpx;
+}
+
+.space-hero {
+  padding: 30rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 18rpx;
+  background: #b9ddd4;
+  box-shadow: 6rpx 6rpx 0 #23211f;
+}
+
+.space-title {
+  font-size: 42rpx;
+  font-weight: 900;
+}
+
+.space-copy {
+  margin-top: 14rpx;
+  color: #42564f;
+  font-size: 24rpx;
+  line-height: 1.55;
+}
+
+.space-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8rpx;
+  margin: 30rpx 0 24rpx;
+  padding: 8rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 12rpx;
+  background: #fffdfa;
+}
+
+.space-tabs view {
+  height: 64rpx;
+  border-radius: 8rpx;
+  font-size: 23rpx;
+  font-weight: 900;
+  line-height: 64rpx;
+  text-align: center;
+}
+
+.space-tabs .active {
+  background: #23211f;
+  color: #fffdfa;
+}
+
+.full-button {
+  width: 100%;
+}
+
+.form-card {
+  margin-top: 24rpx;
+}
+
+.visibility-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12rpx;
+  margin: 14rpx 0 26rpx;
+}
+
+.visibility-options view {
+  padding: 20rpx 8rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 10rpx;
+  background: #ffffff;
+  font-size: 24rpx;
+  font-weight: 900;
+  text-align: center;
+}
+
+.visibility-options .active {
+  background: #ffd66b;
+}
+
+.card-time {
+  color: #8b8178;
+  font-size: 20rpx;
+}
+
+.card-title {
+  margin: 20rpx 0 12rpx;
+  font-size: 30rpx;
+  font-weight: 900;
+}
+
+.card-content {
+  font-size: 26rpx;
+  line-height: 1.65;
+}
+
+.consent-copy {
+  margin-bottom: 24rpx;
+  padding: 18rpx;
+  border-radius: 10rpx;
+  background: #fff4cf;
+  color: #635a50;
+  font-size: 22rpx;
+  line-height: 1.55;
+}
+
+.record-text {
+  min-height: 260rpx;
+}
+
+.selected-file {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 18rpx;
+  padding: 16rpx;
+  background: #eee8df;
+  font-size: 22rpx;
+}
+
+.remove-file {
+  color: #a3442d;
+  font-weight: 900;
+}
+
+.submit-record,
+.analyze-button,
+.reminder-button {
+  margin-top: 22rpx;
+}
+
+.status-line,
+.schedule-time {
+  color: #2f6f63;
+  font-size: 25rpx;
+  font-weight: 900;
+}
+
+.source-quote {
+  margin: 18rpx 0 24rpx;
+  padding: 18rpx;
+  border-left: 6rpx solid #f2b8a2;
+  background: #f8eee9;
+  color: #675d56;
+  font-size: 23rpx;
+  line-height: 1.55;
+}
+
+.quota-note {
+  margin-top: 16rpx;
+  color: #81776e;
+  font-size: 20rpx;
+  line-height: 1.5;
+}
+
+.member-card {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+}
+
+.member-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 78rpx;
+  height: 78rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 50%;
+  background: #ffd66b;
+  font-size: 30rpx;
+  font-weight: 900;
+}
+
+.member-main {
+  flex: 1;
+}
+
+.member-name {
+  margin-bottom: 6rpx;
+  font-size: 29rpx;
+  font-weight: 900;
+}
+
+.candidate-name {
+  font-size: 30rpx;
+  font-weight: 900;
+}
+
+.candidate-summary {
+  margin: 14rpx 0 20rpx;
+  color: #625b54;
+  font-size: 25rpx;
+  line-height: 1.6;
+}
+
+.invite-button {
+  width: 100%;
+}

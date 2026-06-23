@@ -1,0 +1,126 @@
+<view class="dm-page space-page">
+  <view wx:if="{{loading}}" class="dm-loading">正在进入协作空间...</view>
+  <block wx:elif="{{project}}">
+    <view class="space-hero">
+      <view class="dm-eyebrow">PROJECT SPACE · MEMBERS ONLY</view>
+      <view class="space-title">{{project.name}}</view>
+      <view class="space-copy">这里是项目成员协作空间。记录和 AI 草稿默认不对围观者公开。</view>
+    </view>
+
+    <view class="space-tabs">
+      <view class="{{activeTab === 'progress' ? 'active' : ''}}" data-tab="progress" bindtap="switchTab">进度</view>
+      <view class="{{activeTab === 'records' ? 'active' : ''}}" data-tab="records" bindtap="switchTab">记录</view>
+      <view class="{{activeTab === 'schedule' ? 'active' : ''}}" data-tab="schedule" bindtap="switchTab">日程</view>
+      <view class="{{activeTab === 'members' ? 'active' : ''}}" data-tab="members" bindtap="switchTab">成员</view>
+    </view>
+
+    <block wx:if="{{activeTab === 'progress'}}">
+      <button class="dm-primary full-button" bindtap="toggleUpdateForm">{{showUpdateForm ? '收起发布框' : '发布项目进度'}}</button>
+      <view wx:if="{{showUpdateForm}}" class="dm-card form-card">
+        <view class="dm-field">
+          <view class="dm-label">进度标题</view>
+          <input class="dm-input" data-field="title" value="{{updateForm.title}}" bindinput="onUpdateInput" placeholder="这次完成了什么" />
+        </view>
+        <view class="dm-field">
+          <view class="dm-label">进度内容</view>
+          <textarea class="dm-textarea" data-field="content" value="{{updateForm.content}}" bindinput="onUpdateInput" placeholder="写清楚变化、结果和下一步" />
+        </view>
+        <view class="dm-label">谁可以看到</view>
+        <view class="visibility-options">
+          <view class="{{updateForm.visibility === 'project_members' ? 'active' : ''}}" data-value="project_members" bindtap="setUpdateVisibility">仅项目成员</view>
+          <view class="{{updateForm.visibility === 'public' ? 'active' : ''}}" data-value="public" bindtap="setUpdateVisibility">公开给围观者</view>
+        </view>
+        <button class="dm-secondary full-button" loading="{{submitting}}" bindtap="publishUpdate">确认发布</button>
+      </view>
+      <view wx:if="{{!updates.length}}" class="dm-card dm-empty"><view class="dm-muted">项目内还没有进度。</view></view>
+      <view wx:for="{{updates}}" wx:key="id" class="dm-card">
+        <view class="dm-row dm-between">
+          <view class="dm-pill green">项目内可见</view>
+          <view class="card-time">{{item.dateLabel}}</view>
+        </view>
+        <view class="card-title">{{item.title}}</view>
+        <view class="card-content">{{item.content}}</view>
+      </view>
+    </block>
+
+    <block wx:elif="{{activeTab === 'records'}}">
+      <button class="dm-primary full-button" bindtap="toggleRecordForm">{{showRecordForm ? '收起上传框' : '上传 / 粘贴项目记录'}}</button>
+      <view wx:if="{{showRecordForm}}" class="dm-card form-card">
+        <view class="consent-copy">系统会分析记录并生成草稿。正式公开、记忆和证据仍需确认。</view>
+        <view class="dm-field">
+          <view class="dm-label">记录标题</view>
+          <input class="dm-input" data-field="title" value="{{recordForm.title}}" bindinput="onRecordInput" placeholder="例如：6 月项目同步会" />
+        </view>
+        <view class="dm-field">
+          <view class="dm-label">粘贴文字</view>
+          <textarea class="dm-textarea record-text" data-field="rawText" value="{{recordForm.rawText}}" bindinput="onRecordInput" placeholder="会议纪要、聊天记录或手动笔记" />
+        </view>
+        <button class="dm-ghost full-button" bindtap="chooseFile">选择 txt / md / docx / pdf</button>
+        <view wx:if="{{selectedFile}}" class="selected-file">
+          <text>{{selectedFile.name}} · {{selectedFile.size}} bytes</text>
+          <text class="remove-file" bindtap="clearFile">移除</text>
+        </view>
+        <button class="dm-secondary full-button submit-record" loading="{{submitting}}" bindtap="submitRecord">确认有权并上传</button>
+      </view>
+      <view wx:if="{{!records.length}}" class="dm-card dm-empty"><view class="dm-muted">还没有项目记录。</view></view>
+      <view wx:for="{{records}}" wx:key="id" class="dm-card record-card">
+        <view class="dm-row dm-between">
+          <view class="dm-pill">{{item.record_type}}</view>
+          <view class="card-time">{{item.dateLabel}}</view>
+        </view>
+        <view class="card-title">{{item.title}}</view>
+        <view class="status-line">AI 状态：{{item.ai_process_status}}</view>
+        <button
+          wx:if="{{item.ai_process_status === 'pending' || item.ai_process_status === 'failed'}}"
+          class="dm-secondary analyze-button"
+          data-id="{{item.id}}"
+          loading="{{analyzingId === item.id}}"
+          bindtap="analyzeRecord"
+        >让项目秘书分析</button>
+      </view>
+    </block>
+
+    <block wx:elif="{{activeTab === 'schedule'}}">
+      <view class="dm-section-title">待确认的提醒草稿</view>
+      <view wx:if="{{!reminderIntents.length}}" class="dm-card dm-empty"><view class="dm-muted">AI 暂时没有识别出待确认时间。</view></view>
+      <view wx:for="{{reminderIntents}}" wx:key="id" class="dm-card intent-card">
+        <view class="dm-row dm-between">
+          <view class="dm-pill red">需要确认</view>
+          <view>置信度 {{item.confidence}}</view>
+        </view>
+        <view class="card-title">{{item.title}}</view>
+        <view class="schedule-time">{{item.timeLabel}}</view>
+        <view class="source-quote">原文：{{item.source_quote}}</view>
+        <button class="dm-primary full-button" data-id="{{item.id}}" bindtap="confirmIntent">确认并创建日程</button>
+      </view>
+
+      <view class="dm-section-title">项目日程</view>
+      <view wx:if="{{!projectEvents.length}}" class="dm-card dm-empty"><view class="dm-muted">还没有正式项目日程。</view></view>
+      <view wx:for="{{projectEvents}}" wx:key="id" class="dm-card schedule-card">
+        <view class="dm-pill green">项目日程</view>
+        <view class="card-title">{{item.title}}</view>
+        <view class="schedule-time">{{item.dateLabel}}</view>
+        <view wx:if="{{item.location}}" class="dm-muted">{{item.location}}</view>
+        <button class="dm-secondary full-button reminder-button" data-id="{{item.id}}" bindtap="authorizeReminder">接收这一次微信提醒</button>
+        <view class="quota-note">普通订阅消息按一次授权、一次发送机会处理，不承诺永久提醒。</view>
+      </view>
+    </block>
+
+    <block wx:else>
+      <view wx:if="{{inviteCandidates.length}}" class="dm-section-title">线下见过，待邀请入局</view>
+      <view wx:for="{{inviteCandidates}}" wx:key="user_id" class="dm-card candidate-card">
+        <view class="candidate-name">{{item.display_name}}</view>
+        <view class="candidate-summary">{{item.ai_summary}}</view>
+        <button class="dm-primary invite-button" data-id="{{item.user_id}}" bindtap="inviteCandidate">邀请入局</button>
+      </view>
+      <view class="dm-section-title">项目成员</view>
+      <view wx:for="{{members}}" wx:key="user_id" class="dm-card member-card">
+        <view class="member-avatar">{{item.avatarText}}</view>
+        <view class="member-main">
+          <view class="member-name">{{item.display_name}}</view>
+          <view class="dm-muted">{{item.role}} · {{item.status}}</view>
+        </view>
+      </view>
+    </block>
+  </block>
+</view>

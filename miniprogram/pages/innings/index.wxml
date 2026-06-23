@@ -1,0 +1,68 @@
+<view class="dm-page innings-page">
+  <view class="dm-header">
+    <view>
+      <view class="dm-eyebrow">START / JOIN</view>
+      <view class="dm-title">开局</view>
+      <view class="dm-subtitle">这里放你自己发起的项目、已经入局的项目，以及官方可以线下认识人的局。</view>
+    </view>
+    <button class="create-button" bindtap="createProject">提项目</button>
+  </view>
+
+  <view class="innings-tabs">
+    <view class="{{activeTab === 'mine' ? 'active' : ''}}" data-tab="mine" bindtap="switchTab">我的开局</view>
+    <view class="{{activeTab === 'events' ? 'active' : ''}}" data-tab="events" bindtap="switchTab">官方开局</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="dm-loading">正在找你的局...</view>
+  <block wx:elif="{{activeTab === 'mine'}}">
+    <view wx:if="{{!projects.length}}" class="dm-card dm-empty">
+      <image src="/images/daimao2/empty.png" mode="aspectFit" />
+      <view class="dm-section-title">你还没有开局</view>
+      <view class="dm-muted">通过社区认证后，可以申请参与公开项目；想发起项目请先联系官方审核。</view>
+    </view>
+    <view wx:for="{{projects}}" wx:key="id" class="dm-card project-card" data-id="{{item.id}}" data-member="{{item.is_member || item.is_creator}}" bindtap="openProject">
+      <view class="dm-row dm-between">
+        <view class="dm-row">
+          <image class="mini-icon" src="/images/daimao2/puzzle.png" mode="aspectFit" />
+          <view class="dm-pill green">{{item.is_creator ? '我发起' : '已入局'}}</view>
+        </view>
+        <view class="dm-muted">{{item.status}}</view>
+      </view>
+      <view class="project-title">{{item.name}}</view>
+      <view wx:if="{{item.tags.length}}" class="project-tags">
+        <text wx:for="{{item.tags}}" wx:key="*this">#{{item}}</text>
+      </view>
+      <view class="project-copy">{{item.description}}</view>
+      <view class="project-meta">★ {{item.star_count || 0}} · {{item.watch_count || 0}} 人围观</view>
+    </view>
+  </block>
+
+  <block wx:else>
+    <view wx:for="{{events}}" wx:key="id" class="dm-card event-card">
+      <view class="dm-row dm-between">
+        <view class="dm-row">
+          <image class="mini-icon" src="/images/daimao2/calendar.png" mode="aspectFit" />
+          <view class="dm-pill yellow">官方局</view>
+        </view>
+        <view class="dm-muted">{{item.dateLabel}}</view>
+      </view>
+      <view class="project-title">{{item.title}}</view>
+      <view class="project-copy">{{item.description}}</view>
+      <view class="project-meta">{{item.location}}</view>
+      <button wx:if="{{item.registered}}" class="dm-secondary event-button">已报名</button>
+      <button wx:else class="dm-primary event-button" data-id="{{item.id}}" bindtap="register">报名参加</button>
+    </view>
+  </block>
+
+  <view class="dm-bottom-nav">
+    <view class="dm-nav-item active"><image class="dm-nav-icon" src="{{icons.innings}}" />开局</view>
+    <view class="dm-nav-item" data-target="friends" bindtap="goNav"><image class="dm-nav-icon" src="{{icons.friends}}" />猫友</view>
+    <view class="dm-nav-item primary-nav" data-target="watch" bindtap="goNav"><image class="dm-nav-icon" src="{{icons.watch}}" />围观</view>
+    <view class="dm-nav-item" data-target="me" bindtap="goNav"><image class="dm-nav-icon" src="{{icons.me}}" />我的</view>
+  </view>
+  <view class="secretary-float-tip">小秘书</view>
+  <view class="secretary-float" bindtap="openSecretary">
+    <image class="{{secretaryBubble.frame === 0 ? 'show' : ''}}" src="{{secretaryBubble.frames[0]}}" mode="aspectFit" />
+    <image class="{{secretaryBubble.frame === 1 ? 'show' : ''}}" src="{{secretaryBubble.frames[1]}}" mode="aspectFit" />
+  </view>
+</view>

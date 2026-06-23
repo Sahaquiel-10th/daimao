@@ -1,0 +1,78 @@
+<view class="dm-page">
+  <view class="dm-header">
+    <view>
+      <view class="dm-eyebrow">AGENT PROFILE</view>
+      <view class="dm-title">告诉秘书怎么帮你</view>
+      <view class="dm-subtitle">这里只用于推荐和撮合判断。你可以随时关闭 AI 参与。</view>
+    </view>
+  </view>
+
+  <view wx:if="{{loading}}" class="dm-loading">正在读取你的合作偏好...</view>
+  <block wx:else>
+    <view class="dm-card">
+      <view class="dm-field">
+        <view class="dm-label">公开合作介绍</view>
+        <textarea class="dm-textarea" data-field="publicIntro" value="{{form.publicIntro}}" bindinput="onInput" placeholder="别人可以看到的一段合作介绍" />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">当前角色</view>
+        <input class="dm-input" data-field="currentRole" value="{{form.currentRole}}" bindinput="onInput" placeholder="例如：独立开发者 / 品牌主理人" />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">当前目标</view>
+        <input class="dm-input" data-field="currentGoalsText" value="{{form.currentGoalsText}}" bindinput="onInput" placeholder="多个目标用顿号分隔" />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">我能提供</view>
+        <input class="dm-input" data-field="canOfferText" value="{{form.canOfferText}}" bindinput="onInput" placeholder="产品、设计、渠道、场地..." />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">我正在寻找</view>
+        <input class="dm-input" data-field="lookingForText" value="{{form.lookingForText}}" bindinput="onInput" placeholder="合作伙伴、客户、反馈..." />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">不希望被什么打扰</view>
+        <input class="dm-input" data-field="notInterestedInText" value="{{form.notInterestedInText}}" bindinput="onInput" placeholder="例如：泛泛加微信、公开接单" />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">偏好的项目类型</view>
+        <input class="dm-input" data-field="preferredProjectTypesText" value="{{form.preferredProjectTypesText}}" bindinput="onInput" placeholder="AI 产品、内容品牌、线下活动..." />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">合作方式</view>
+        <textarea class="dm-textarea short" data-field="collaborationStyle" value="{{form.collaborationStyle}}" bindinput="onInput" placeholder="你习惯怎样推进、同步和做决定" />
+      </view>
+
+      <view class="dm-check-row">
+        <view>
+          <view class="dm-label">允许秘书参与撮合</view>
+          <view class="dm-muted">用于判断哪些约见值得通知你</view>
+        </view>
+        <switch checked="{{form.allowMatchmaking}}" color="#2f6f63" data-field="allowMatchmaking" bindchange="onSwitch" />
+      </view>
+      <view class="dm-check-row">
+        <view>
+          <view class="dm-label">允许生成个人合作摘要</view>
+          <view class="dm-muted">AI 结果先作为候选，不直接公开</view>
+        </view>
+        <switch checked="{{form.allowAiProfile}}" color="#2f6f63" data-field="allowAiProfile" bindchange="onSwitch" />
+      </view>
+    </view>
+
+    <button class="dm-primary save-button" loading="{{saving}}" bindtap="save">保存秘书资料</button>
+    <button class="dm-ghost card-button" bindtap="openCard">回到我的呆猫名片</button>
+
+    <view wx:if="{{memories.length}}" class="dm-section-title">已确认的协作记忆</view>
+    <view wx:for="{{memories}}" wx:key="id" class="dm-card memory-card">
+      <view class="dm-pill">{{item.evidence_level}}</view>
+      <view>{{item.content}}</view>
+    </view>
+  </block>
+
+  <view class="dm-bottom-nav">
+    <view class="dm-nav-item" data-target="innings" bindtap="goNav"><image class="dm-nav-icon" src="{{icons.innings}}" />开局</view>
+    <view class="dm-nav-item" data-target="friends" bindtap="goNav"><image class="dm-nav-icon" src="{{icons.friends}}" />猫友</view>
+    <view class="dm-nav-item primary-nav" data-target="watch" bindtap="goNav"><image class="dm-nav-icon" src="{{icons.watch}}" />围观</view>
+    <view class="dm-nav-item active"><image class="dm-nav-icon" src="{{icons.me}}" />我的</view>
+  </view>
+</view>

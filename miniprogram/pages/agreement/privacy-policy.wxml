@@ -1,0 +1,47 @@
+<view class="agreement-page">
+  <view class="agreement-title">隐私政策</view>
+  <view class="agreement-date">更新日期：2026年6月13日</view>
+
+  <view class="section">
+    <view class="section-title">一、我们收集的信息</view>
+    <view class="paragraph">1. 你主动填写的名片信息：姓名或称呼、身份/职位、微信号、个人介绍、问答内容、关键词。</view>
+    <view class="paragraph">2. 你主动选择的头像：包括从相册或相机上传的头像，或通过微信头像能力选择的头像。</view>
+    <view class="paragraph">3. NFC 贴纸相关信息：贴纸编号、唯一 token、绑定状态、绑定用户标识、绑定时间、访问时间和访问次数。</view>
+    <view class="paragraph">4. 猫友与访问记录：当用户通过 NFC 贴纸访问名片时，我们会记录贴纸、名片所有者、访问者用户标识、访问来源和访问时间，用于建立双方的猫友关系。</view>
+    <view class="paragraph">5. 订阅提醒信息：当尚未创建名片的访问者主动选择“允许提醒一次”时，我们会记录该次订阅授权、授权双方、授权状态和提醒发送状态。</view>
+    <view class="paragraph">6. 为保障小程序运行，微信小程序平台和云开发服务可能处理必要的设备、网络和运行日志信息。我们不主动收集手机号。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">二、收集目的</view>
+    <view class="paragraph">上述信息用于创建和展示个人名片、绑定 NFC 贴纸、防止贴纸被多人重复绑定、建立和展示线下认识用户之间的双向猫友关系、经用户主动授权后发送一次名片完善提醒、保存头像素材，以及排查小程序运行问题。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">三、使用和展示方式</view>
+    <view class="paragraph">你保存的名片信息会在他人通过已绑定贴纸或你主动分享的页面路径访问时展示。微信号用于他人复制并添加联系。</view>
+    <view class="paragraph">当你同意启用“我的猫友”后，如果你通过其他用户的贴纸查看其名片，或其他用户通过你的贴纸查看你的名片，并且双方都已经创建名片且同意本规则，双方保存的公开名片会互相出现在“我的猫友”列表中。</view>
+    <view class="paragraph">尚未创建名片或尚未同意新版规则的访问者，可能以无姓名的“还没留下名片”占位项出现在其访问过的贴纸主人列表中，但我们不会向贴纸主人展示该访问者的微信身份、OpenID 或其他可识别身份的信息。</view>
+    <view class="paragraph">当尚未创建名片的访问者主动点击“允许提醒一次”并在微信订阅弹窗中同意后，该贴纸主人可以发送一次“资料提交提醒”。拒绝订阅不影响查看、保存名片或使用其他功能。提醒发送一次后，不会再次通过该次授权发送。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">四、保存方式</view>
+    <view class="paragraph">名片资料、贴纸绑定关系、访问记录、订阅授权和提醒状态保存在微信云开发数据库中；用户上传的头像保存在微信云开发云存储中；小程序本地会缓存你的名片、浏览历史和协议同意状态，以便提升使用体验。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">五、是否共享给第三方</view>
+    <view class="paragraph">除“我的猫友”功能中向与你发生 NFC 名片访问关系、且同意该功能的其他用户展示你的公开名片外，我们不会将你的个人信息出售或共享给无关第三方。为实现小程序运行，相关数据会使用微信小程序平台和腾讯云开发服务进行存储、计算和传输。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">六、撤回授权和删除数据</view>
+    <view class="paragraph">你可以在小程序中修改名片信息，并通过微信小程序设置管理订阅消息授权。你也可以联系小程序运营者申请停用“我的猫友”、删除云端名片资料、头像文件、猫友、访问记录及订阅记录，或解绑 NFC 贴纸。删除本地缓存可使用小程序设置清理缓存。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">七、联系我们</view>
+    <view class="paragraph">如需撤回授权、删除数据、解绑贴纸或咨询个人信息处理问题，请通过小程序内展示的运营者联系方式与我们联系。</view>
+  </view>
+</view>

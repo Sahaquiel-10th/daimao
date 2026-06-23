@@ -1,0 +1,70 @@
+<view class="dm-page edit-page">
+  <view class="dm-header">
+    <view>
+      <view class="dm-eyebrow">START A PROJECT</view>
+      <view class="dm-title">发起一个真实项目</view>
+      <view class="dm-subtitle">先写清楚正在做什么。公开后大家可以围观，但不能直接加入。</view>
+    </view>
+  </view>
+
+  <view class="dm-card">
+    <view class="dm-field">
+      <view class="dm-label">项目名称</view>
+      <input class="dm-input" data-field="name" value="{{project.name}}" bindinput="onInput" maxlength="60" placeholder="一句话说清楚项目" />
+    </view>
+    <view class="dm-field">
+      <view class="dm-label">项目介绍</view>
+      <textarea class="dm-textarea" data-field="description" value="{{project.description}}" bindinput="onInput" maxlength="2000" placeholder="为什么做、现在到了哪一步、希望别人看到什么" />
+    </view>
+    <view class="dm-field">
+      <view class="dm-label">项目标签</view>
+      <input class="dm-input" data-field="tagsText" value="{{project.tagsText}}" bindinput="onInput" placeholder="AI产品 品牌 销售 大型项目" />
+    </view>
+    <view class="dm-field">
+      <view class="dm-label">项目类型</view>
+      <picker range="{{types}}" range-key="label" value="{{typeIndex}}" bindchange="onTypeChange">
+        <view class="dm-picker">{{types[typeIndex].label}} ›</view>
+      </picker>
+    </view>
+    <view class="dm-grid-two">
+      <view class="dm-field">
+        <view class="dm-label">当前阶段</view>
+        <input class="dm-input" data-field="stage" value="{{project.stage}}" bindinput="onInput" placeholder="例如：公开测试" />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">阶段目标</view>
+        <input class="dm-input" data-field="goal" value="{{project.goal}}" bindinput="onInput" placeholder="这次想做到什么" />
+      </view>
+    </view>
+    <view class="dm-field">
+      <view class="dm-label">希望谁来</view>
+      <textarea class="dm-textarea short" data-field="idealParticipant" value="{{project.idealParticipant}}" bindinput="onInput" maxlength="1000" placeholder="例如：做过 AI 产品原型、有品牌项目交付经验、愿意每周同步的人" />
+    </view>
+    <view class="dm-field">
+      <view class="dm-label">不适合谁</view>
+      <textarea class="dm-textarea short" data-field="notFitParticipant" value="{{project.notFitParticipant}}" bindinput="onInput" maxlength="1000" placeholder="例如：只想围观、不愿意记录进度、不接销售任务的人" />
+    </view>
+    <view class="dm-grid-two">
+      <view class="dm-field">
+        <view class="dm-label">需要能力</view>
+        <input class="dm-input" data-field="requiredCapabilitiesText" value="{{project.requiredCapabilitiesText}}" bindinput="onInput" placeholder="原型 运营 销售" />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">参与方式</view>
+        <input class="dm-input" data-field="participationRolesText" value="{{project.participationRolesText}}" bindinput="onInput" placeholder="顾问 执行 资源" />
+      </view>
+    </view>
+    <view class="visibility-row">
+      <view>
+        <view class="dm-label">公开给社区围观</view>
+        <view class="dm-muted">关闭时仅自己和受邀成员可见</view>
+      </view>
+      <switch checked="{{project.visibility === 'public'}}" color="#2f6f63" bindchange="onVisibilityChange" />
+    </view>
+  </view>
+
+  <view class="privacy-note">项目内记录、成员内容和 AI 草稿默认不公开。公开进度需要单独选择“公开可见”。</view>
+  <button class="dm-primary submit-button" loading="{{submitting}}" bindtap="submit">
+    {{project.visibility === 'public' ? '创建并公开项目' : '保存私密草稿'}}
+  </button>
+</view>

@@ -1,0 +1,39 @@
+<view class="agreement-page">
+  <view class="agreement-title">用户服务协议</view>
+  <view class="agreement-date">更新日期：2026年6月13日</view>
+
+  <view class="section">
+    <view class="section-title">一、服务说明</view>
+    <view class="paragraph">呆猫小程序用于帮助用户创建个人名片，并通过 NFC 贴纸或小程序页面路径向他人展示名片信息。用户可以填写姓名、身份/职位、微信号、头像、个人介绍、问答内容和关键词。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">二、用户承诺</view>
+    <view class="paragraph">你应确保填写和展示的信息真实、合法，不得冒用他人身份，不得发布违法、侵权、骚扰、欺诈或其他不适宜公开展示的内容。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">三、名片展示与贴纸绑定</view>
+    <view class="paragraph">当你保存名片或绑定 NFC 贴纸后，其他用户通过对应贴纸或页面路径访问时，可以看到你主动填写并保存的名片内容。一个用户可以绑定多个贴纸，一个贴纸同一时间只能绑定一个用户。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">四、我的猫友</view>
+    <view class="paragraph">“我的猫友”用于记录通过 NFC 名片发生线下认识关系的用户。当你碰过他人的贴纸，或他人碰过你的贴纸，且双方均已创建名片并同意相关规则时，双方可以在猫友列表中查看彼此主动公开的名片内容。尚未创建名片的访问者只会显示为不含身份信息的占位项。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">五、一次性提醒</view>
+    <view class="paragraph">尚未创建名片的访问者可以主动订阅一次资料提交提醒。只有在访问者通过微信订阅弹窗同意后，对应贴纸主人才能发送一次提醒；拒绝订阅不影响其他功能。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">六、内容修改与删除</view>
+    <view class="paragraph">你可以在小程序内编辑自己的名片信息。如需删除云端资料、解绑贴纸或处理异常数据，可联系小程序运营者协助处理。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">七、服务变更</view>
+    <view class="paragraph">我们可能根据产品迭代调整页面、功能或文案。涉及个人信息处理规则变化时，将按要求更新隐私政策或重新提示你确认。</view>
+  </view>
+</view>

@@ -1,0 +1,28 @@
+.edit-page {
+  padding-bottom: 60rpx;
+}
+
+.visibility-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12rpx;
+}
+
+.privacy-note {
+  margin: 28rpx 0;
+  padding: 22rpx;
+  border: 2rpx dashed #80766d;
+  border-radius: 12rpx;
+  color: #6f675f;
+  font-size: 23rpx;
+  line-height: 1.55;
+}
+
+.submit-button {
+  width: 100%;
+}
+
+.dm-textarea.short {
+  min-height: 140rpx;
+}

@@ -1,0 +1,77 @@
+<view class="dm-page detail-page">
+  <view wx:if="{{loading}}" class="dm-loading">正在打开项目...</view>
+  <block wx:elif="{{project}}">
+    <view class="hero-card">
+      <view class="dm-row dm-between">
+        <view class="dm-row">
+          <view wx:if="{{project.is_official_recommended}}" class="dm-pill yellow">官方推荐</view>
+          <view class="dm-pill green">{{project.stage || '进行中'}}</view>
+        </view>
+        <view class="hero-stars">★ {{project.star_count}}</view>
+      </view>
+      <view class="hero-title">{{project.name}}</view>
+      <view wx:if="{{project.tags.length}}" class="project-tags">
+        <text wx:for="{{project.tags}}" wx:key="*this">#{{item}}</text>
+      </view>
+      <view class="hero-description">{{project.description}}</view>
+      <view wx:if="{{project.goal}}" class="goal-box">
+        <view class="goal-label">这次想做到</view>
+        <view>{{project.goal}}</view>
+      </view>
+      <view class="owner-line">主理人：{{project.creator_name || '项目主理人'}} · {{project.watch_count || 0}} 人围观</view>
+    </view>
+
+    <view class="action-grid">
+      <button class="{{project.is_watching ? 'dm-secondary' : 'dm-primary'}}" bindtap="toggleWatch">
+        {{project.is_watching ? '正在围观 ★' : '围观项目 ☆'}}
+      </button>
+      <button wx:if="{{project.is_member}}" class="dm-secondary" bindtap="openSpace">进入协作空间</button>
+      <button wx:else class="{{project.can_apply ? 'dm-ghost' : 'dm-secondary'}}" bindtap="openApplyForm">
+        {{project.can_apply ? '申请参与' : '认证后可申请'}}
+      </button>
+    </view>
+
+    <view class="principle">围观者可以看项目和点星星。通过任一社区认证后，才能申请参与；申请先由小秘书审核，再递交给主理人。</view>
+
+    <view class="dm-section-title">公开进度</view>
+    <view wx:if="{{!updates.length}}" class="dm-card dm-empty">
+      <view class="dm-muted">项目还没有发布公开进度。</view>
+    </view>
+    <view wx:for="{{updates}}" wx:key="id" class="dm-card update-card">
+      <view class="dm-row dm-between">
+        <view class="dm-pill">{{item.update_type === 'milestone' ? '里程碑' : '项目进度'}}</view>
+        <view class="update-time">{{item.created_at}}</view>
+      </view>
+      <view class="update-title">{{item.title}}</view>
+      <view class="update-content">{{item.content}}</view>
+    </view>
+  </block>
+
+  <view wx:if="{{showApplyForm}}" class="modal-mask" catchtap="closeApplyForm">
+    <view class="meeting-sheet" catchtap="noop">
+      <view class="sheet-title">申请参与项目</view>
+      <view class="dm-subtitle">小秘书会先根据你的资料和项目需求做审核摘要，通过后再递交给主理人。</view>
+      <view class="dm-field">
+        <view class="dm-label">你想参与什么</view>
+        <textarea class="dm-textarea" data-field="message" value="{{application.message}}" bindinput="onApplicationInput" placeholder="具体说说你想参与的部分、目标和投入方式" />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">你能提供什么</view>
+        <textarea class="dm-textarea short" data-field="canOffer" value="{{application.canOffer}}" bindinput="onApplicationInput" placeholder="经验、能力、资源或可投入的时间" />
+      </view>
+      <view class="dm-field">
+        <view class="dm-label">相关经历</view>
+        <textarea class="dm-textarea short" data-field="relatedExperience" value="{{application.relatedExperience}}" bindinput="onApplicationInput" placeholder="做过什么类似事情，或者有哪些能证明靠谱的经历" />
+      </view>
+      <view class="dm-grid-two">
+        <button class="dm-ghost" bindtap="closeApplyForm">取消</button>
+        <button class="dm-primary" loading="{{submitting}}" bindtap="submitApplication">交给秘书</button>
+      </view>
+    </view>
+  </view>
+  <view class="secretary-float-tip">小秘书</view>
+  <view class="secretary-float" bindtap="openSecretary">
+    <image class="{{secretaryBubble.frame === 0 ? 'show' : ''}}" src="{{secretaryBubble.frames[0]}}" mode="aspectFit" />
+    <image class="{{secretaryBubble.frame === 1 ? 'show' : ''}}" src="{{secretaryBubble.frames[1]}}" mode="aspectFit" />
+  </view>
+</view>

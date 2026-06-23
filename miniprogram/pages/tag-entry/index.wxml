@@ -1,0 +1,49 @@
+<view class="tag-entry-page">
+  <view class="brand-row">
+    <view class="brand-mark">呆</view>
+    <view>
+      <view class="brand-title">呆猫贴纸</view>
+      <view class="brand-subtitle">贴一下，递一张可爱的名片</view>
+    </view>
+  </view>
+
+  <view class="entry-card">
+    <image wx:if="{{entryCatSrc}}" class="entry-cat" src="{{entryCatSrc}}" mode="aspectFit" />
+
+    <block wx:if="{{status === 'loading' || status === 'binding' || status === 'redirecting'}}">
+      <view class="loader"></view>
+      <view class="entry-title">{{title}}</view>
+      <view wx:if="{{message}}" class="entry-message">{{message}}</view>
+    </block>
+
+    <block wx:elif="{{status === 'unbound'}}">
+      <view class="badge">还没认领</view>
+      <view class="entry-title">{{title}}</view>
+      <view class="entry-message">{{message}}</view>
+      <view class="agreement-check">
+        <checkbox class="agreement-checkbox" checked="{{agreementAccepted}}" bindtap="toggleAgreement" />
+        <view class="agreement-text">
+          <text bindtap="toggleAgreement">我已阅读并同意</text>
+          <text class="agreement-link" data-type="service" catchtap="openAgreement">《用户服务协议》</text>
+          <text>和</text>
+          <text class="agreement-link" data-type="privacy" catchtap="openAgreement">《隐私政策》</text>
+        </view>
+      </view>
+      <button hover-class="button-press" class="primary-button" bindtap="bindToMe">确认绑定到我的名片</button>
+    </block>
+
+    <block wx:elif="{{status === 'boundSuccess'}}">
+      <view class="badge success">认领好啦</view>
+      <view class="entry-title">{{title}}</view>
+      <view class="entry-message">以后别人碰一下，它就会乖乖递出你的介绍卡。</view>
+      <button hover-class="button-press" class="primary-button" bindtap="openMyCard">看看我的名片</button>
+    </block>
+
+    <block wx:elif="{{status === 'error'}}">
+      <view class="badge error">没认出来</view>
+      <view class="entry-title">呆猫没有认出这张贴纸。</view>
+      <view class="entry-message">{{message}}</view>
+      <button hover-class="button-press" class="secondary-button" bindtap="retry">再让它闻一下</button>
+    </block>
+  </view>
+</view>

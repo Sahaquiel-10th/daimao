@@ -1,0 +1,42 @@
+<view class="dm-page">
+  <view class="dm-header">
+    <view>
+      <view class="dm-eyebrow">OFFICIAL EVENTS</view>
+      <view class="dm-title">官方开局</view>
+      <view class="dm-subtitle">活动只由平台或授权主理人发布。在线报名，线下认识，碰一碰留下真实关系。</view>
+    </view>
+  </view>
+
+  <view wx:if="{{loading}}" class="dm-loading">正在整理最近的局...</view>
+  <view wx:elif="{{!events.length}}" class="dm-card dm-empty">
+    <image wx:if="{{emptySrc}}" src="{{emptySrc}}" mode="aspectFit" />
+    <view class="dm-section-title">最近还没有新活动</view>
+  </view>
+  <view wx:for="{{events}}" wx:key="id" class="dm-card event-card">
+    <view class="dm-row dm-between">
+      <view class="dm-pill yellow">官方开局</view>
+      <view class="capacity">{{item.capacityLabel}}</view>
+    </view>
+    <view class="event-title">{{item.title}}</view>
+    <view class="event-description">{{item.description}}</view>
+    <view class="event-info">
+      <view class="info-row">
+        <image wx:if="{{calendarSrc}}" src="{{calendarSrc}}" mode="aspectFit" />
+        <text>{{item.dateLabel}}</text>
+      </view>
+      <view class="info-row">
+        <image wx:if="{{locationSrc}}" src="{{locationSrc}}" mode="aspectFit" />
+        <text>{{item.location}}</text>
+      </view>
+    </view>
+    <button wx:if="{{item.registered}}" class="dm-secondary event-button">已报名，等你来</button>
+    <button wx:else class="dm-primary event-button" data-id="{{item.id}}" loading="{{registeringId === item.id}}" bindtap="register">报名参加</button>
+  </view>
+
+  <view class="dm-bottom-nav">
+    <view class="dm-nav-item active" data-target="innings" bindtap="goNav"><image class="dm-nav-icon" src="{{icons.innings}}" />开局</view>
+    <view class="dm-nav-item" data-target="friends" bindtap="goNav"><image class="dm-nav-icon" src="{{icons.friends}}" />猫友</view>
+    <view class="dm-nav-item primary-nav" data-target="watch" bindtap="goNav"><image class="dm-nav-icon" src="{{icons.watch}}" />围观</view>
+    <view class="dm-nav-item" data-target="me" bindtap="goNav"><image class="dm-nav-icon" src="{{icons.me}}" />我的</view>
+  </view>
+</view>

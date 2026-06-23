@@ -1,0 +1,17 @@
+.dm-textarea.short {
+  min-height: 130rpx;
+}
+
+.save-button,
+.card-button {
+  width: 100%;
+  margin-top: 22rpx;
+}
+
+.memory-card {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  font-size: 26rpx;
+  line-height: 1.55;
+}

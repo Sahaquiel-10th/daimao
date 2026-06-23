@@ -1,0 +1,14 @@
+{
+  "name": "daimao-business",
+  "version": "2.0.0",
+  "main": "index.js",
+  "license": "ISC",
+  "dependencies": {
+    "@cloudbase/node-sdk": "latest",
+    "ajv": "^8.17.1",
+    "mammoth": "^1.9.0",
+    "mysql2": "^3.14.1",
+    "pdf-parse": "^1.1.1",
+    "wx-server-sdk": "~2.4.0"
+  }
+}

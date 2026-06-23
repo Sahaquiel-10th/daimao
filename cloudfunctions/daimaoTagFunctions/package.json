@@ -1,0 +1,11 @@
+{
+  "name": "daimaoTagFunctions",
+  "version": "1.0.0",
+  "description": "Daimao NFC tag claim and visit APIs",
+  "main": "index.js",
+  "license": "ISC",
+  "dependencies": {
+    "@cloudbase/node-sdk": "latest",
+    "wx-server-sdk": "~2.4.0"
+  }
+}

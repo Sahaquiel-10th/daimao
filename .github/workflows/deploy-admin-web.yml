@@ -1,0 +1,62 @@
+name: Deploy Admin Web
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "admin-web/**"
+      - "deploy/nginx/daimao-admin.conf"
+      - ".github/workflows/deploy-admin-web.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: admin-web/package-lock.json
+
+      - name: Build admin web
+        working-directory: admin-web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package dist
+        run: tar -czf /tmp/daimao-admin-dist.tgz -C admin-web/dist .
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload package
+        run: |
+          scp -i ~/.ssh/deploy_key /tmp/daimao-admin-dist.tgz \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/tmp/daimao-admin-dist.tgz"
+
+      - name: Activate release
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" <<'EOF'
+          set -euo pipefail
+          DEPLOY_BASE="${DEPLOY_BASE:-/var/www/daimao-admin}"
+          RELEASE_ID="$(date +%Y%m%d%H%M%S)"
+          RELEASE_DIR="${DEPLOY_BASE}/releases/${RELEASE_ID}"
+          mkdir -p "$RELEASE_DIR"
+          tar -xzf /tmp/daimao-admin-dist.tgz -C "$RELEASE_DIR"
+          ln -sfn "$RELEASE_DIR" "${DEPLOY_BASE}/current"
+          rm -f /tmp/daimao-admin-dist.tgz
+          find "${DEPLOY_BASE}/releases" -mindepth 1 -maxdepth 1 -type d | sort | head -n -5 | xargs -r rm -rf
+          EOF

@@ -1,0 +1,94 @@
+<view class="dm-page secretary-page {{closing ? 'closing' : ''}}">
+  <view class="secretary-topbar">
+    <button class="back-button" bindtap="closeSecretary">‹ 返回</button>
+  </view>
+
+  <view class="secretary-hero">
+    <image wx:if="{{secretarySrc}}" src="{{secretarySrc}}" mode="aspectFit" />
+    <view class="secretary-copy">
+      <view class="dm-eyebrow">DAIMAO SECRETARY</view>
+      <view class="secretary-title">我替你看了一下</view>
+    </view>
+  </view>
+
+  <view class="brief-card">
+    <view wx:if="{{loading}}" class="brief-line">正在翻记录...</view>
+    <block wx:else>
+      <view wx:for="{{briefLines}}" wx:key="*this" class="brief-line">
+        <view class="brief-dot"></view>
+        <text>{{item}}</text>
+      </view>
+    </block>
+  </view>
+
+  <view class="stats-row">
+    <view>
+      <text>{{stats.pending}}</text>
+      <label>待处理</label>
+    </view>
+    <view>
+      <text>{{stats.unread}}</text>
+      <label>新消息</label>
+    </view>
+    <view>
+      <text>{{stats.recommended}}</text>
+      <label>可围观</label>
+    </view>
+  </view>
+
+  <view class="section-row">
+    <view class="section-title">待处理</view>
+  </view>
+  <view wx:if="{{!meetingRequests.length && !projectApplications.length && !invitations.length}}" class="quiet-card">
+    暂时没有需要你决定的请求。
+  </view>
+  <view wx:for="{{projectApplications}}" wx:key="id" class="dm-card action-card">
+    <view class="dm-pill red">参与申请</view>
+    <view class="notice-title">{{item.requester_name}} · {{item.project_name}}</view>
+    <view class="notice-content">{{item.ai_review_summary || item.message}}</view>
+    <view class="application-detail">{{item.can_offer}}</view>
+    <view class="dm-grid-two request-actions">
+      <button class="dm-ghost" data-id="{{item.id}}" data-decision="rejected" bindtap="respondProjectApplication">暂不接受</button>
+      <button class="dm-primary" data-id="{{item.id}}" data-decision="accepted" bindtap="respondProjectApplication">发出邀请</button>
+    </view>
+  </view>
+  <view wx:for="{{meetingRequests}}" wx:key="id" class="dm-card action-card">
+    <view class="dm-pill red">约见请求</view>
+    <view class="notice-title">{{item.requester_name}} · {{item.project_name}}</view>
+    <view class="notice-content">{{item.ai_summary || item.message}}</view>
+    <view class="dm-grid-two request-actions">
+      <button class="dm-ghost" data-id="{{item.id}}" data-decision="rejected" bindtap="respondMeeting">暂不接受</button>
+      <button class="dm-primary" data-id="{{item.id}}" data-decision="accepted" bindtap="respondMeeting">同意继续聊</button>
+    </view>
+  </view>
+  <view wx:for="{{invitations}}" wx:key="project_id" class="dm-card action-card">
+    <view class="dm-pill green">项目邀请</view>
+    <view class="notice-title">{{item.project_name}}</view>
+    <view class="notice-content">主理人邀请你加入项目协作空间，角色：{{item.role}}。</view>
+    <button class="dm-primary invitation-button" data-id="{{item.project_id}}" bindtap="acceptInvitation">确认入局</button>
+  </view>
+
+  <view class="section-row">
+    <view class="section-title">新消息</view>
+  </view>
+  <view wx:if="{{!notifications.length}}" class="quiet-card">没有新消息。</view>
+  <view
+    wx:for="{{notifications}}"
+    wx:key="id"
+    class="message-card {{item.read_status === 'unread' ? 'unread' : ''}}"
+    data-id="{{item.id}}"
+    bindtap="readNotification"
+  >
+    <view class="message-title">{{item.title}}</view>
+    <view class="message-content">{{item.content}}</view>
+  </view>
+
+  <view class="section-row">
+    <view class="section-title">可以围观</view>
+  </view>
+  <view wx:if="{{!recommendations.length}}" class="quiet-card">暂时没有新的项目推荐。</view>
+  <view wx:for="{{recommendations}}" wx:key="target_id" class="recommendation-card" data-id="{{item.target_id}}" bindtap="openRecommendation">
+    <view class="notice-title">{{item.name}}</view>
+    <view class="notice-content">{{item.reason_summary}}</view>
+  </view>
+</view>
