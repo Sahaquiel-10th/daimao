@@ -1,0 +1,17 @@
+[Unit]
+Description=Daimao Admin API Proxy
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/daimao/admin-web
+EnvironmentFile=-/etc/daimao-admin.env
+Environment=NODE_ENV=production
+Environment=ADMIN_API_HOST=127.0.0.1
+Environment=ADMIN_API_PORT=8090
+ExecStart=/usr/bin/node server/proxy.cjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

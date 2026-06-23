@@ -14,7 +14,22 @@ ADMIN_WEB_OPENID=可选，指定某个 is_admin=1 的 openid
 
 `ADMIN_WEB_TOKEN` 不要写入 `admin-web/.env`。前端页面会让管理员手动输入 token。
 
-## 2. 服务器一次性初始化
+## 2. 服务器代理配置
+
+管理后台默认不再让浏览器直接调用 CloudBase。浏览器请求同源接口 `/api/admin`，服务器上的 `daimao-admin-api` 代理服务再调用云函数 `daimaoBusiness`。
+
+在服务器配置 `/etc/daimao-admin.env`：
+
+```text
+CLOUDBASE_ENV=cloud1-8gocbg40af3862ce
+CLOUDBASE_FUNCTION=daimaoBusiness
+TENCENTCLOUD_SECRETID=腾讯云访问密钥 SecretId
+TENCENTCLOUD_SECRETKEY=腾讯云访问密钥 SecretKey
+```
+
+`TENCENTCLOUD_SECRETID` 和 `TENCENTCLOUD_SECRETKEY` 来自腾讯云访问管理 CAM。建议创建只用于部署/CloudBase 调用的子用户密钥，不要把主账号密钥放进代码仓库。
+
+## 3. 服务器一次性初始化
 
 登录轻量应用服务器：
 
@@ -42,7 +57,7 @@ http://服务器公网IP:8088
 
 腾讯云安全组需要放行 TCP `8088` 端口。
 
-## 3. 手动部署一次
+## 4. 手动部署一次
 
 如果暂时不接 GitHub Actions，可以在服务器仓库目录执行：
 
@@ -52,7 +67,14 @@ git pull
 bash scripts/deploy-admin-web-local.sh
 ```
 
-## 4. GitHub Actions 自动部署
+检查代理服务：
+
+```bash
+sudo systemctl status daimao-admin-api --no-pager
+curl -sS http://127.0.0.1:8090/health
+```
+
+## 5. GitHub Actions 自动部署
 
 在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 添加：
 
@@ -78,7 +100,7 @@ ssh-copy-id -i ~/.ssh/daimao_admin_deploy.pub ubuntu@服务器公网IP
 
 以后推送到 `main` 分支且改动涉及 `admin-web/**` 时，会自动构建并发布。
 
-## 5. IP 访问和多项目
+## 6. IP 访问和多项目
 
 没有域名时，公网 IP 就是入口：
 

@@ -4,6 +4,8 @@ const env = import.meta.env.VITE_CLOUDBASE_ENV || "cloud1-8gocbg40af3862ce";
 const functionName = import.meta.env.VITE_CLOUDBASE_FUNCTION || "daimaoBusiness";
 const region = import.meta.env.VITE_CLOUDBASE_REGION || "ap-shanghai";
 const mockEnabled = import.meta.env.VITE_ADMIN_USE_MOCK === "true";
+const apiMode = import.meta.env.VITE_ADMIN_API_MODE || "proxy";
+const proxyUrl = import.meta.env.VITE_ADMIN_API_URL || "/api/admin";
 
 let app;
 let signInPromise;
@@ -79,6 +81,7 @@ export async function callAdmin(action, data = {}) {
   if (mockEnabled) return mockCall(action, data);
   const adminWebToken = getToken();
   if (!adminWebToken) throw new Error("请先填写后台访问令牌");
+  if (apiMode !== "cloudbase") return callAdminProxy(action, { adminWebToken, ...data });
   await ensureAuth();
   try {
     const result = await getApp().callFunction({
@@ -95,6 +98,26 @@ export async function callAdmin(action, data = {}) {
   } catch (err) {
     err.cloudbaseStage = "调用云函数";
     throw normalizeCloudbaseError(err);
+  }
+}
+
+async function callAdminProxy(action, data = {}) {
+  try {
+    const response = await fetch(proxyUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...data }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload || !payload.success) {
+      const error = new Error((payload && payload.message) || `后台代理服务返回 HTTP ${response.status}`);
+      error.code = payload && payload.code;
+      throw error;
+    }
+    return payload;
+  } catch (err) {
+    if (err.code) throw err;
+    throw new Error(`后台代理服务连接失败：${err.message || err}`);
   }
 }
 
