@@ -49,7 +49,7 @@ jobs:
           RELEASE_DIR="${DEPLOY_BASE}/releases/${RELEASE_ID}"
           mkdir -p "$RELEASE_DIR"
           tar -xzf /tmp/daimao-admin-dist.tgz -C "$RELEASE_DIR"
-          ln -sfn "$RELEASE_DIR" "${DEPLOY_BASE}/current"
+          ln -sfnT "$RELEASE_DIR" "${DEPLOY_BASE}/current"
           rm -f /tmp/daimao-admin-dist.tgz
           find "${DEPLOY_BASE}/releases" -mindepth 1 -maxdepth 1 -type d | sort | head -n -5 | xargs -r rm -rf
           EOF

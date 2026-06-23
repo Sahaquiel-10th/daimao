@@ -13,7 +13,7 @@ npm run build
 
 mkdir -p "$RELEASE_DIR"
 rsync -a --delete "${APP_DIR}/dist/" "${RELEASE_DIR}/"
-ln -sfn "$RELEASE_DIR" "${DEPLOY_BASE}/current"
+ln -sfnT "$RELEASE_DIR" "${DEPLOY_BASE}/current"
 
 if command -v nginx >/dev/null 2>&1; then
   sudo nginx -t
@@ -21,4 +21,3 @@ if command -v nginx >/dev/null 2>&1; then
 fi
 
 echo "Deployed admin-web to ${RELEASE_DIR}"
-

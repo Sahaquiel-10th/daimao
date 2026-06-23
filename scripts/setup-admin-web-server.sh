@@ -19,8 +19,12 @@ sudo apt install -y nginx git curl ca-certificates
 sudo mkdir -p "${DEPLOY_BASE}/releases" "${DEPLOY_BASE}/shared"
 sudo chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "$DEPLOY_BASE"
 
-mkdir -p "${DEPLOY_BASE}/current"
-echo "<!doctype html><title>daimao-admin</title><p>daimao-admin is ready.</p>" > "${DEPLOY_BASE}/current/index.html"
+READY_RELEASE="${DEPLOY_BASE}/releases/ready"
+rm -rf "$READY_RELEASE"
+mkdir -p "$READY_RELEASE"
+echo "<!doctype html><title>daimao-admin</title><p>daimao-admin is ready.</p>" > "${READY_RELEASE}/index.html"
+rm -rf "${DEPLOY_BASE}/current"
+ln -sfnT "$READY_RELEASE" "${DEPLOY_BASE}/current"
 
 sudo cp "$NGINX_CONF_SOURCE" "$NGINX_CONF_TARGET"
 sudo ln -sfn "$NGINX_CONF_TARGET" "/etc/nginx/sites-enabled/${APP_NAME}"
