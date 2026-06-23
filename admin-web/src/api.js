@@ -2,27 +2,36 @@ import cloudbase from "@cloudbase/js-sdk";
 
 const env = import.meta.env.VITE_CLOUDBASE_ENV || "cloud1-8gocbg40af3862ce";
 const functionName = import.meta.env.VITE_CLOUDBASE_FUNCTION || "daimaoBusiness";
+const region = import.meta.env.VITE_CLOUDBASE_REGION || "ap-shanghai";
 const mockEnabled = import.meta.env.VITE_ADMIN_USE_MOCK === "true";
 
 let app;
 let signInPromise;
 
 function getApp() {
-  if (!app) app = cloudbase.init({ env });
+  if (!app) app = cloudbase.init({ env, region });
   return app;
 }
 
 async function ensureAuth() {
+  let stage = "检查登录态";
   try {
     const auth = getApp().auth({ persistence: "local" });
     const state = await auth.getLoginState();
     if (state) return;
+    stage = "匿名登录";
     if (!signInPromise) signInPromise = signInAnonymously(auth);
     await signInPromise;
+    stage = "确认登录态";
     const signedInState = await auth.getLoginState();
     if (!signedInState) throw new Error("匿名登录后仍未获取到 CloudBase 登录态");
+    if (typeof auth.loginScope === "function") {
+      const scope = await auth.loginScope();
+      if (!scope) throw new Error("匿名登录后 CloudBase loginScope 为空");
+    }
   } catch (err) {
     signInPromise = null;
+    err.cloudbaseStage = stage;
     throw normalizeCloudbaseError(err);
   }
 }
@@ -66,13 +75,14 @@ export async function callAdmin(action, data = {}) {
     }
     return payload;
   } catch (err) {
+    err.cloudbaseStage = "调用云函数";
     throw normalizeCloudbaseError(err);
   }
 }
 
 function normalizeCloudbaseError(err) {
   const rawMessage = errorMessage(err);
-  const context = cloudbaseContext();
+  const context = cloudbaseContext(err);
   if (/scope|anonymous|auth|login/i.test(rawMessage)) {
     return new Error(`CloudBase Web 登录未就绪：请检查匿名登录、Web 安全来源和环境 ID。\n${context}\n原始错误：${rawMessage}`);
   }
@@ -82,9 +92,10 @@ function normalizeCloudbaseError(err) {
   return new Error(`CloudBase 调用失败。\n${context}\n原始错误：${rawMessage || "未知错误"}`);
 }
 
-function cloudbaseContext() {
+function cloudbaseContext(err) {
   const origin = typeof window !== "undefined" && window.location ? window.location.origin : "";
-  return `当前 Origin：${origin || "-"}\n当前 CloudBase env：${env}\n当前云函数：${functionName}`;
+  const stage = err && err.cloudbaseStage ? `\n当前阶段：${err.cloudbaseStage}` : "";
+  return `当前 Origin：${origin || "-"}\n当前 CloudBase env：${env}\n当前 CloudBase region：${region}\n当前云函数：${functionName}${stage}`;
 }
 
 function errorMessage(err) {
