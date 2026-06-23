@@ -24,10 +24,8 @@ echo "<!doctype html><title>daimao-admin</title><p>daimao-admin is ready.</p>" >
 
 sudo cp "$NGINX_CONF_SOURCE" "$NGINX_CONF_TARGET"
 sudo ln -sfn "$NGINX_CONF_TARGET" "/etc/nginx/sites-enabled/${APP_NAME}"
-sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl enable nginx
 sudo systemctl reload nginx
 
-echo "Nginx is serving ${DEPLOY_BASE}/current on port 80."
-
+echo "Nginx is serving ${DEPLOY_BASE}/current on port 8088."
