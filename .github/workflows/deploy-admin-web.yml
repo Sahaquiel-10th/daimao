@@ -47,7 +47,10 @@ jobs:
 
       - name: Package deployment source
         run: |
-          tar -czf /tmp/daimao-admin-source.tgz \
+          tar \
+            --exclude='admin-web/node_modules' \
+            --exclude='admin-web/dist' \
+            -czf /tmp/daimao-admin-source.tgz \
             admin-web \
             deploy/nginx/daimao-admin.conf \
             deploy/systemd/daimao-admin-api.service \
