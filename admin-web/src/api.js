@@ -101,6 +101,38 @@ export async function callAdmin(action, data = {}) {
   }
 }
 
+export async function uploadAsset(kind, file) {
+  const adminWebToken = getToken();
+  if (!adminWebToken) throw new Error("请先填写后台访问令牌");
+  if (!file) throw new Error("请选择图片");
+  const dataUrl = await readFileAsDataUrl(file);
+  const response = await fetch("/api/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      adminWebToken,
+      kind,
+      filename: file.name,
+      contentType: file.type,
+      dataUrl,
+    }),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload || !payload.success) {
+    throw new Error((payload && payload.message) || `上传失败 HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
 async function callAdminProxy(action, data = {}) {
   try {
     const response = await fetch(proxyUrl, {
