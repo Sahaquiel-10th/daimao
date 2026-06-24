@@ -45,6 +45,20 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
 
+      - name: Package deployment source
+        run: |
+          tar -czf /tmp/daimao-admin-source.tgz \
+            admin-web \
+            deploy/nginx/daimao-admin.conf \
+            deploy/systemd/daimao-admin-api.service \
+            scripts/deploy-admin-web-local.sh \
+            scripts/setup-admin-web-server.sh
+
+      - name: Upload deployment source
+        run: |
+          scp -i ~/.ssh/deploy_key /tmp/daimao-admin-source.tgz \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/tmp/daimao-admin-source.tgz"
+
       - name: Deploy on server
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" <<'EOF'
@@ -52,8 +66,8 @@ jobs:
           sudo -H bash -lc '
             set -euo pipefail
             cd /root/daimao
-            git config --global http.version HTTP/1.1
-            git pull --ff-only origin main
+            tar -xzf /tmp/daimao-admin-source.tgz -C /root/daimao
+            rm -f /tmp/daimao-admin-source.tgz
             bash scripts/deploy-admin-web-local.sh
             for i in 1 2 3 4 5 6 7 8 9 10; do
               curl -fsS http://127.0.0.1:8090/health && exit 0

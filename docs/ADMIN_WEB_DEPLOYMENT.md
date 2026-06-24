@@ -105,10 +105,10 @@ ssh-copy-id -i ~/.ssh/daimao_admin_deploy.pub ubuntu@服务器公网IP
 
 把私钥 `~/.ssh/daimao_admin_deploy` 的完整内容填进 GitHub Secret `DEPLOY_SSH_KEY`。
 
-自动部署会使用这个 SSH key 登录服务器，然后执行：
+自动部署会先在 GitHub Actions 里构建校验，再把 `admin-web`、部署脚本和 Nginx/systemd 配置打包传到服务器，最后执行：
 
 ```bash
-sudo -H bash -lc 'cd /root/daimao && git pull --ff-only origin main && bash scripts/deploy-admin-web-local.sh'
+sudo -H bash -lc 'cd /root/daimao && tar -xzf /tmp/daimao-admin-source.tgz -C /root/daimao && bash scripts/deploy-admin-web-local.sh'
 ```
 
 所以服务器上的 `ubuntu` 用户需要能免密 `sudo`，腾讯云 Ubuntu 镜像默认通常满足这一点。
