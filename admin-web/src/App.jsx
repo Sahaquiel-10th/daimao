@@ -90,6 +90,18 @@ function firstText(value, fallback = "猫") {
   return String(value || fallback).trim().slice(0, 1);
 }
 
+function officialDisplayOrder(weight) {
+  const value = Number(weight || 0);
+  if (!value) return 1;
+  if (value >= 900) return Math.max(1, Math.min(5, 1000 - value));
+  return Math.max(1, Math.min(5, value));
+}
+
+function officialWeightFromOrder(order) {
+  const value = Math.max(1, Math.min(5, Number(order || 1)));
+  return 1000 - value;
+}
+
 function userDraftFrom(user) {
   const profile = user?.profile || {};
   return {
@@ -317,7 +329,13 @@ export default function App() {
             </div>
             <section className="panel dm-card">
               <h3>官方项目顺序</h3>
-              <ProjectTable projects={(data?.projects || []).filter((item) => item.is_official_recommended).slice(0, 5)} onEdit={setProjectDraft} />
+                <ProjectTable
+                  projects={(data?.projects || [])
+                    .filter((item) => item.is_official_recommended)
+                    .sort((a, b) => Number(b.official_sort_weight || 0) - Number(a.official_sort_weight || 0))
+                    .slice(0, 5)}
+                  onEdit={setProjectDraft}
+                />
             </section>
           </section>
         )}
@@ -563,7 +581,7 @@ function ProjectTable({ projects, onEdit }) {
             </td>
             <td><Badge tone={project.status === "active" ? "green" : "default"}>{statusLabel(project.status)}</Badge></td>
             <td>{project.visibility}</td>
-            <td>{project.is_official_recommended ? <Badge tone="yellow">#{project.official_sort_weight || 99}</Badge> : "-"}</td>
+            <td>{project.is_official_recommended ? <Badge tone="yellow">#{officialDisplayOrder(project.official_sort_weight)}</Badge> : "-"}</td>
             <td>{project.star_count || project.watch_count || 0}</td>
             <td>{formatDate(project.updated_at)}</td>
             <td><button onClick={() => onEdit(project)}>编辑</button></td>
@@ -626,12 +644,18 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload }) {
         <input
           type="checkbox"
           checked={!!draft.is_official_recommended}
-          onChange={(event) => onChange({ ...draft, is_official_recommended: event.target.checked ? 1 : 0, official_sort_weight: draft.official_sort_weight || 1 })}
+          onChange={(event) => onChange({ ...draft, is_official_recommended: event.target.checked ? 1 : 0, official_sort_weight: draft.official_sort_weight || officialWeightFromOrder(1) })}
         />
         官方推荐
       </label>
       <Field label="官方展示顺序">
-        <input min="1" max="5" type="number" value={draft.official_sort_weight || 1} onChange={(event) => onChange({ ...draft, official_sort_weight: event.target.value })} />
+        <input
+          min="1"
+          max="5"
+          type="number"
+          value={officialDisplayOrder(draft.official_sort_weight)}
+          onChange={(event) => onChange({ ...draft, official_sort_weight: officialWeightFromOrder(event.target.value) })}
+        />
       </Field>
       <Field label="目标">
         <textarea value={draft.goal || ""} onChange={(event) => onChange({ ...draft, goal: event.target.value })} />
@@ -790,7 +814,7 @@ function toProjectPatch(draft) {
     status: draft.status,
     visibility: draft.visibility,
     isOfficialRecommended: !!draft.is_official_recommended,
-    officialSortWeight: Number(draft.official_sort_weight || 0),
+    officialSortWeight: Number(draft.official_sort_weight || officialWeightFromOrder(1)),
     goal: draft.goal,
     coverUrl: draft.cover_url || draft.coverUrl || "",
   };
