@@ -22,6 +22,7 @@ ADMIN_WEB_OPENID=可选，指定某个 is_admin=1 的 openid
 
 ```text
 CLOUDBASE_ENV=cloud1-8gocbg40af3862ce
+CLOUDBASE_REGION=ap-shanghai
 CLOUDBASE_FUNCTION=daimaoBusiness
 TENCENTCLOUD_SECRETID=腾讯云访问密钥 SecretId
 TENCENTCLOUD_SECRETKEY=腾讯云访问密钥 SecretKey

@@ -3,6 +3,7 @@ const cloudbase = require("@cloudbase/node-sdk");
 
 const env = process.env.CLOUDBASE_ENV || process.env.ADMIN_API_CLOUDBASE_ENV || "cloud1-8gocbg40af3862ce";
 const functionName = process.env.CLOUDBASE_FUNCTION || process.env.ADMIN_API_CLOUDBASE_FUNCTION || "daimaoBusiness";
+const region = process.env.CLOUDBASE_REGION || process.env.ADMIN_API_CLOUDBASE_REGION || "ap-shanghai";
 const port = Number(process.env.ADMIN_API_PORT || 8090);
 const host = process.env.ADMIN_API_HOST || "127.0.0.1";
 const secretId = process.env.TENCENTCLOUD_SECRETID || process.env.CLOUDBASE_SECRET_ID || process.env.CLOUDBASE_SECRETID;
@@ -15,7 +16,7 @@ function getApp() {
     if (!secretId || !secretKey) {
       throw new Error("缺少 TENCENTCLOUD_SECRETID/TENCENTCLOUD_SECRETKEY，无法从服务器调用 CloudBase");
     }
-    app = cloudbase.init({ env, secretId, secretKey });
+    app = cloudbase.init({ env, secretId, secretKey, region });
   }
   return app;
 }
@@ -66,7 +67,7 @@ function publicError(err) {
 const server = http.createServer(async (request, response) => {
   try {
     if (request.method === "GET" && request.url === "/health") {
-      return sendJson(response, 200, { success: true, env, functionName });
+      return sendJson(response, 200, { success: true, env, region, functionName });
     }
     if (request.method !== "POST" || request.url !== "/api/admin") {
       return sendJson(response, 404, { success: false, message: "Not found" });

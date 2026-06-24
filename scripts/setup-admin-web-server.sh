@@ -23,6 +23,7 @@ sudo chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "$DEPLOY_BASE"
 if [[ ! -f "$ENV_FILE" ]]; then
   sudo tee "$ENV_FILE" >/dev/null <<'EOF'
 CLOUDBASE_ENV=cloud1-8gocbg40af3862ce
+CLOUDBASE_REGION=ap-shanghai
 CLOUDBASE_FUNCTION=daimaoBusiness
 TENCENTCLOUD_SECRETID=
 TENCENTCLOUD_SECRETKEY=
