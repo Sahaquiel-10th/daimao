@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  Building2,
   CalendarDays,
+  CheckCircle2,
   Database,
   Lock,
   RefreshCw,
@@ -20,6 +22,7 @@ import catStretch from "./assets/cat-stretch-cutout.png";
 const tabs = [
   { key: "overview", label: "概览", icon: Activity },
   { key: "users", label: "用户", icon: Users },
+  { key: "communities", label: "社区", icon: Building2 },
   { key: "projects", label: "项目", icon: Database },
   { key: "events", label: "活动", icon: CalendarDays },
   { key: "rag", label: "RAG", icon: Search },
@@ -121,6 +124,17 @@ function userDraftFrom(user) {
   };
 }
 
+function communityDraftFrom(community) {
+  return {
+    id: community?.id,
+    name: community?.name || "",
+    badgeName: community?.badge_name || "",
+    logoUrl: community?.logo_url || "",
+    status: community?.status || "active",
+    sortWeight: Number(community?.sort_weight || 0),
+  };
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
   const [usernameInput, setUsernameInput] = useState("admin");
@@ -132,8 +146,10 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState(null);
   const [userDraft, setUserDraft] = useState(null);
+  const [communityDraft, setCommunityDraft] = useState(null);
   const [projectDraft, setProjectDraft] = useState(null);
   const [eventDraft, setEventDraft] = useState(emptyEvent);
+  const [toast, setToast] = useState(null);
 
   async function refresh() {
     setLoading(true);
@@ -159,6 +175,12 @@ export default function App() {
     if (authed) refresh();
   }, [authed]);
 
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
   const stats = useMemo(() => {
     const users = data?.users || [];
     const projects = data?.projects || [];
@@ -181,15 +203,20 @@ export default function App() {
   const filteredEvents = (data?.events || []).filter((item) =>
     [item.title, item.location, item.status].some((value) => String(value || "").includes(query))
   );
+  const filteredCommunities = (data?.communities || []).filter((item) =>
+    [item.name, item.badge_name, item.status].some((value) => String(value || "").includes(query))
+  );
 
-  async function run(action, payload) {
+  async function run(action, payload, successMessage = "操作已完成") {
     setLoading(true);
     setError("");
     try {
       await callAdmin(action, payload);
       await refresh();
+      setToast({ type: "success", message: successMessage });
     } catch (err) {
       setError(err.message || "操作失败");
+      setToast({ type: "error", message: err.message || "操作失败" });
       setLoading(false);
     }
   }
@@ -200,8 +227,10 @@ export default function App() {
     try {
       const result = await uploadAsset(kind, file);
       apply(result.fileID);
+      setToast({ type: "success", message: "图片已上传，记得保存当前表单" });
     } catch (err) {
       setError(err.message || "上传失败");
+      setToast({ type: "error", message: err.message || "上传失败" });
     } finally {
       setLoading(false);
     }
@@ -234,6 +263,10 @@ export default function App() {
   function selectUser(user) {
     setSelectedUser(user);
     setUserDraft(userDraftFrom(user));
+  }
+
+  function selectCommunity(community) {
+    setCommunityDraft(communityDraftFrom(community));
   }
 
   if (!authed) {
@@ -324,6 +357,12 @@ export default function App() {
             </button>
           </div>
         )}
+        {toast && (
+          <div className={`toast toast-${toast.type}`} role="status">
+            <CheckCircle2 size={17} />
+            <span>{toast.message}</span>
+          </div>
+        )}
         {loading && !data && <div className="loading">正在加载后台数据...</div>}
 
         {activeTab === "overview" && (
@@ -358,12 +397,14 @@ export default function App() {
         )}
 
         {activeTab === "users" && (
-          <section className="split-view user-view">
+          <section className="content-grid">
             <section className="panel dm-card">
               <h3>用户资料与社区认证</h3>
               <UserTable users={filteredUsers} onEdit={selectUser} />
             </section>
-            <UserEditor
+            {userDraft && (
+              <Modal title="用户编辑" onClose={() => { setSelectedUser(null); setUserDraft(null); }}>
+                <UserEditor
               draft={userDraft}
               communities={data?.communities || []}
               onChange={setUserDraft}
@@ -372,7 +413,7 @@ export default function App() {
                 run("adminUpdateUser", {
                   userId: userDraft.id,
                   patch: userDraft,
-                })
+                }, "用户资料已保存")
               }
               onSaveCommunity={() =>
                 userDraft?.communityId &&
@@ -380,13 +421,40 @@ export default function App() {
                   userId: userDraft.id,
                   communityId: userDraft.communityId,
                   tagsText: userDraft.communityTags,
-                })
+                }, "社区认证已保存")
               }
               onDelete={() => {
                 if (!userDraft) return;
                 const ok = window.confirm(`确认删除用户「${userDraft.displayName || userDraft.id}」？\n这会禁用账号并移除管理员权限。`);
-                if (ok) run("adminDeleteUser", { userId: userDraft.id });
+                if (ok) {
+                  run("adminDeleteUser", { userId: userDraft.id }, "用户已禁用");
+                  setSelectedUser(null);
+                  setUserDraft(null);
+                }
               }}
+                />
+              </Modal>
+            )}
+          </section>
+        )}
+
+        {activeTab === "communities" && (
+          <section className="split-view">
+            <section className="panel dm-card">
+              <h3>社区与徽章</h3>
+              <CommunityTable communities={filteredCommunities} onEdit={selectCommunity} />
+            </section>
+            <CommunityEditor
+              draft={communityDraft}
+              onChange={setCommunityDraft}
+              onUpload={(file) => upload("community-logo", file, (fileID) => setCommunityDraft((draft) => ({ ...draft, logoUrl: fileID })))}
+              onSubmit={() =>
+                communityDraft &&
+                run("adminUpdateCommunity", {
+                  communityId: communityDraft.id,
+                  patch: communityDraft,
+                }, "社区资料已保存")
+              }
             />
           </section>
         )}
@@ -401,7 +469,7 @@ export default function App() {
               draft={projectDraft}
               onChange={setProjectDraft}
               onUpload={(file) => upload("project-cover", file, (fileID) => setProjectDraft((draft) => ({ ...draft, cover_url: fileID })))}
-              onSubmit={() => projectDraft && run("adminUpdateProject", { projectId: projectDraft.id, patch: toProjectPatch(projectDraft) })}
+              onSubmit={() => projectDraft && run("adminUpdateProject", { projectId: projectDraft.id, patch: toProjectPatch(projectDraft) }, "项目已保存")}
             />
           </section>
         )}
@@ -418,8 +486,8 @@ export default function App() {
               onUpload={(file) => upload("event-cover", file, (fileID) => setEventDraft((draft) => ({ ...draft, coverUrl: fileID })))}
               onSubmit={() => {
                 const payload = toEventPayload(eventDraft);
-                if (eventDraft.id) run("adminUpdateEvent", { eventId: eventDraft.id, event: payload });
-                else run("adminCreateEvent", { event: payload });
+                if (eventDraft.id) run("adminUpdateEvent", { eventId: eventDraft.id, event: payload }, "活动已保存");
+                else run("adminCreateEvent", { event: payload }, "活动已发布");
               }}
               onNew={() => setEventDraft(emptyEvent)}
             />
@@ -467,7 +535,6 @@ function UserTable({ users, onEdit }) {
     <table>
       <thead>
         <tr>
-          <th>ID</th>
           <th>用户</th>
           <th>社区徽章</th>
           <th>经验</th>
@@ -479,7 +546,6 @@ function UserTable({ users, onEdit }) {
       <tbody>
         {users.map((user) => (
           <tr key={user.id}>
-            <td>{user.id}</td>
             <td>
               <div className="user-cell">
                 {user.avatar_url ? <img className="avatar" src={user.avatar_url} alt="" /> : <span className="avatar text-avatar">{firstText(user.display_name)}</span>}
@@ -507,6 +573,20 @@ function UserTable({ users, onEdit }) {
   );
 }
 
+function Modal({ title, children, onClose }) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="modal-panel dm-card" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-title">
+          <h3>{title}</h3>
+          <button type="button" className="icon-button" onClick={onClose} title="关闭">×</button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+
 function UserEditor({ draft, communities, onChange, onSubmit, onSaveCommunity, onDelete }) {
   if (!draft) {
     return (
@@ -517,9 +597,8 @@ function UserEditor({ draft, communities, onChange, onSubmit, onSaveCommunity, o
     );
   }
   return (
-    <aside className="panel editor-panel dm-card">
+    <div className="editor-panel embedded-editor">
       <div className="editor-title">
-        <h3>用户编辑</h3>
         <button className="danger-button" onClick={onDelete}><Trash2 size={15} />删除</button>
       </div>
       <Field label="展示名">
@@ -567,6 +646,79 @@ function UserEditor({ draft, communities, onChange, onSubmit, onSaveCommunity, o
         <input value={draft.communityTags} onChange={(event) => onChange({ ...draft, communityTags: event.target.value })} placeholder="如 AI产品 需求梳理" />
       </Field>
       <button onClick={onSaveCommunity}>保存社区认证</button>
+    </div>
+  );
+}
+
+function CommunityTable({ communities, onEdit }) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>社区</th>
+          <th>徽章</th>
+          <th>状态</th>
+          <th>排序</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {communities.map((community) => (
+          <tr key={community.id}>
+            <td>
+              <div className="user-cell">
+                {community.logo_url ? <img className="avatar square-avatar" src={community.logo_url} alt="" /> : <span className="avatar square-avatar text-avatar">{firstText(community.name, "社")}</span>}
+                <div className="title-stack">
+                  <strong>{community.name || "-"}</strong>
+                  <span>{community.description || "社区资料"}</span>
+                </div>
+              </div>
+            </td>
+            <td><Badge tone="yellow">{community.badge_name || "-"}</Badge></td>
+            <td><Badge tone={community.status === "active" ? "green" : "red"}>{statusLabel(community.status)}</Badge></td>
+            <td>{community.sort_weight || 0}</td>
+            <td><button onClick={() => onEdit(community)}>编辑</button></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function CommunityEditor({ draft, onChange, onSubmit, onUpload }) {
+  if (!draft) {
+    return (
+      <aside className="panel editor-panel dm-card">
+        <h3>社区编辑</h3>
+        <p className="muted">选择左侧社区后，可以维护社区名称、徽章、logo 和排序。</p>
+      </aside>
+    );
+  }
+  return (
+    <aside className="panel editor-panel dm-card">
+      <h3>社区编辑</h3>
+      <Field label="社区名称">
+        <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
+      </Field>
+      <Field label="徽章名称">
+        <input value={draft.badgeName} onChange={(event) => onChange({ ...draft, badgeName: event.target.value })} />
+      </Field>
+      <Field label="社区 logo / cloud fileID">
+        <div className="asset-row">
+          <input value={draft.logoUrl} onChange={(event) => onChange({ ...draft, logoUrl: event.target.value })} placeholder="cloud://..." />
+          <UploadButton onUpload={onUpload} />
+        </div>
+      </Field>
+      <Field label="状态">
+        <select value={draft.status} onChange={(event) => onChange({ ...draft, status: event.target.value })}>
+          <option value="active">启用</option>
+          <option value="disabled">禁用</option>
+        </select>
+      </Field>
+      <Field label="排序权重">
+        <input type="number" value={draft.sortWeight} onChange={(event) => onChange({ ...draft, sortWeight: event.target.value })} />
+      </Field>
+      <button className="primary-button" onClick={onSubmit}>保存社区</button>
     </aside>
   );
 }

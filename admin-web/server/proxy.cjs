@@ -312,6 +312,20 @@ async function adminSaveUserCommunity(data) {
   return { success: true, saved: true };
 }
 
+async function adminUpdateCommunity(data) {
+  const communityId = id(data.communityId, "communityId");
+  const patch = data.patch || {};
+  const values = {};
+  if (patch.name !== undefined) values.name = text(patch.name, 120);
+  if (patch.badgeName !== undefined) values.badge_name = text(patch.badgeName, 120);
+  if (patch.logoUrl !== undefined) values.logo_url = text(patch.logoUrl, 1000);
+  if (patch.status !== undefined) values.status = patch.status === "disabled" ? "disabled" : "active";
+  if (patch.sortWeight !== undefined) values.sort_weight = Number(patch.sortWeight || 0);
+  if (!Object.keys(values).length) return { success: true, saved: false };
+  await rdbUpdate("communities", values, (request) => request.eq("id", communityId));
+  return { success: true, saved: true };
+}
+
 async function saveCoverAfterBusiness(data, result) {
   if (!result || !result.success) return result;
   if (data.action === "adminUpdateProject" && data.patch && data.patch.coverUrl !== undefined) {
@@ -329,10 +343,11 @@ async function adminProxyAction(data) {
     if (!result || !result.success) return result;
     return enrichAdminList(result);
   }
-  if (["adminUpdateUser", "adminDeleteUser", "adminSaveUserCommunity"].includes(data.action)) {
+  if (["adminUpdateUser", "adminDeleteUser", "adminSaveUserCommunity", "adminUpdateCommunity"].includes(data.action)) {
     await assertAdmin(data);
     if (data.action === "adminUpdateUser") return adminUpdateUser(data);
     if (data.action === "adminDeleteUser") return adminDeleteUser(data);
+    if (data.action === "adminUpdateCommunity") return adminUpdateCommunity(data);
     return adminSaveUserCommunity(data);
   }
   const result = await callBusiness(businessData(data));
