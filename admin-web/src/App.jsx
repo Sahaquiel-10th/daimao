@@ -12,7 +12,7 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
-import { callAdmin, hasToken, saveAccessKey, saveToken, uploadAsset } from "./api";
+import { callAdmin, hasToken, loginAdmin, saveAccessKey, saveToken, uploadAsset } from "./api";
 import logoCutout from "./assets/logo-cutout.png";
 import catRub from "./assets/cat-rub-cutout.png";
 import catStretch from "./assets/cat-stretch-cutout.png";
@@ -123,7 +123,8 @@ function userDraftFrom(user) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
-  const [tokenInput, setTokenInput] = useState("");
+  const [usernameInput, setUsernameInput] = useState("admin");
+  const [passwordInput, setPasswordInput] = useState("");
   const [authed, setAuthed] = useState(hasToken());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -206,17 +207,25 @@ export default function App() {
     }
   }
 
-  function login(event) {
+  async function login(event) {
     event.preventDefault();
-    saveToken(tokenInput.trim());
-    saveAccessKey("");
-    setAuthed(true);
+    setLoading(true);
+    setError("");
+    try {
+      await loginAdmin(usernameInput.trim(), passwordInput);
+      saveAccessKey("");
+      setAuthed(true);
+    } catch (err) {
+      setError(err.message || "登录失败");
+    } finally {
+      setLoading(false);
+    }
   }
 
   function resetCredentials() {
     saveToken("");
     saveAccessKey("");
-    setTokenInput("");
+    setPasswordInput("");
     setAuthed(false);
     setData(null);
     setError("");
@@ -239,16 +248,24 @@ export default function App() {
               <h1>呆猫管理后台</h1>
             </div>
           </div>
-          <Field label="后台访问令牌">
+          {error && <div className="login-error">{error}</div>}
+          <Field label="账号">
             <input
-              type="password"
-              value={tokenInput}
-              onChange={(event) => setTokenInput(event.target.value)}
-              placeholder="ADMIN_WEB_TOKEN"
+              value={usernameInput}
+              onChange={(event) => setUsernameInput(event.target.value)}
+              placeholder="admin"
               autoFocus
             />
           </Field>
-          <button className="primary-button" type="submit">
+          <Field label="密码">
+            <input
+              type="password"
+              value={passwordInput}
+              onChange={(event) => setPasswordInput(event.target.value)}
+              placeholder="后台密码"
+            />
+          </Field>
+          <button className="primary-button" type="submit" disabled={loading}>
             <Lock size={16} />
             进入后台
           </button>

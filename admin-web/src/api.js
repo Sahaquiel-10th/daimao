@@ -55,7 +55,7 @@ async function signInAnonymously(auth) {
 }
 
 function getToken() {
-  return localStorage.getItem("daimao_admin_web_token") || import.meta.env.VITE_ADMIN_WEB_TOKEN || "";
+  return localStorage.getItem("daimao_admin_session_token") || "";
 }
 
 function getAccessKey() {
@@ -63,7 +63,7 @@ function getAccessKey() {
 }
 
 export function saveToken(token) {
-  localStorage.setItem("daimao_admin_web_token", token || "");
+  localStorage.setItem("daimao_admin_session_token", token || "");
 }
 
 export function saveAccessKey(accessKey) {
@@ -77,16 +77,30 @@ export function hasToken() {
   return !!getToken();
 }
 
+export async function loginAdmin(username, password) {
+  const response = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload || !payload.success || !payload.sessionToken) {
+    throw new Error((payload && payload.message) || "登录失败");
+  }
+  saveToken(payload.sessionToken);
+  return payload;
+}
+
 export async function callAdmin(action, data = {}) {
   if (mockEnabled) return mockCall(action, data);
-  const adminWebToken = getToken();
-  if (!adminWebToken) throw new Error("请先填写后台访问令牌");
-  if (apiMode !== "cloudbase") return callAdminProxy(action, { adminWebToken, ...data });
+  const adminSessionToken = getToken();
+  if (!adminSessionToken) throw new Error("请先登录后台");
+  if (apiMode !== "cloudbase") return callAdminProxy(action, { adminSessionToken, ...data });
   await ensureAuth();
   try {
     const result = await getApp().callFunction({
       name: functionName,
-      data: { action, adminWebToken, ...data },
+      data: { action, adminSessionToken, ...data },
     });
     const payload = result.result || result;
     if (!payload || !payload.success) {
@@ -102,15 +116,15 @@ export async function callAdmin(action, data = {}) {
 }
 
 export async function uploadAsset(kind, file) {
-  const adminWebToken = getToken();
-  if (!adminWebToken) throw new Error("请先填写后台访问令牌");
+  const adminSessionToken = getToken();
+  if (!adminSessionToken) throw new Error("请先登录后台");
   if (!file) throw new Error("请选择图片");
   const dataUrl = await readFileAsDataUrl(file);
   const response = await fetch("/api/upload", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      adminWebToken,
+      adminSessionToken,
       kind,
       filename: file.name,
       contentType: file.type,

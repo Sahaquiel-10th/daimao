@@ -26,9 +26,15 @@ CLOUDBASE_REGION=ap-shanghai
 CLOUDBASE_FUNCTION=daimaoBusiness
 TENCENTCLOUD_SECRETID=腾讯云访问密钥 SecretId
 TENCENTCLOUD_SECRETKEY=腾讯云访问密钥 SecretKey
+ADMIN_WEB_TOKEN=与 daimaoBusiness 云函数环境变量相同的后台令牌
+ADMIN_WEB_USERNAME=admin
+ADMIN_WEB_PASSWORD=后台登录密码
+ADMIN_SESSION_SECRET=一段足够长的随机字符串
 ```
 
 `TENCENTCLOUD_SECRETID` 和 `TENCENTCLOUD_SECRETKEY` 来自腾讯云访问管理 CAM。建议创建只用于部署/CloudBase 调用的子用户密钥，不要把主账号密钥放进代码仓库。
+
+网页登录使用 `ADMIN_WEB_USERNAME` 和 `ADMIN_WEB_PASSWORD`。`ADMIN_WEB_TOKEN` 只保存在服务器上，用来让代理服务调用 `daimaoBusiness`，不要发给普通后台使用者。
 
 ## 3. 服务器一次性初始化
 

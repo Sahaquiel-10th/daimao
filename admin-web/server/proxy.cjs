@@ -1,4 +1,5 @@
 const http = require("http");
+const crypto = require("crypto");
 const cloudbase = require("@cloudbase/node-sdk");
 
 const env = process.env.CLOUDBASE_ENV || process.env.ADMIN_API_CLOUDBASE_ENV || "cloud1-8gocbg40af3862ce";
@@ -8,6 +9,10 @@ const port = Number(process.env.ADMIN_API_PORT || 8090);
 const host = process.env.ADMIN_API_HOST || "127.0.0.1";
 const secretId = process.env.TENCENTCLOUD_SECRETID || process.env.CLOUDBASE_SECRET_ID || process.env.CLOUDBASE_SECRETID;
 const secretKey = process.env.TENCENTCLOUD_SECRETKEY || process.env.CLOUDBASE_SECRET_KEY || process.env.CLOUDBASE_SECRETKEY;
+const adminUsername = process.env.ADMIN_WEB_USERNAME || "admin";
+const adminPassword = process.env.ADMIN_WEB_PASSWORD || "";
+const adminWebToken = process.env.ADMIN_WEB_TOKEN || "";
+const sessionSecret = process.env.ADMIN_SESSION_SECRET || adminWebToken || secretKey || "";
 
 let app;
 let rdbClient;
@@ -88,6 +93,39 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
+function base64url(value) {
+  return Buffer.from(value).toString("base64url");
+}
+
+function sign(value) {
+  return crypto.createHmac("sha256", sessionSecret).update(value).digest("base64url");
+}
+
+function createSessionToken(username) {
+  if (!sessionSecret) throw new Error("缺少 ADMIN_SESSION_SECRET 或 ADMIN_WEB_TOKEN，无法创建后台会话");
+  const payload = base64url(JSON.stringify({
+    username,
+    exp: Date.now() + 12 * 60 * 60 * 1000,
+  }));
+  return `${payload}.${sign(payload)}`;
+}
+
+function verifySessionToken(token) {
+  if (!sessionSecret || !token || typeof token !== "string") return false;
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return false;
+  const expected = sign(payload);
+  const left = Buffer.from(signature);
+  const right = Buffer.from(expected);
+  if (left.length !== right.length || !crypto.timingSafeEqual(left, right)) return false;
+  try {
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return data && data.exp && Date.now() < Number(data.exp);
+  } catch (err) {
+    return false;
+  }
+}
+
 function publicError(err) {
   return {
     success: false,
@@ -154,19 +192,33 @@ async function callBusiness(data) {
   return result.result || result;
 }
 
+function resolveAdminWebToken(data) {
+  if (data && data.adminWebToken) return data.adminWebToken;
+  if (data && verifySessionToken(data.adminSessionToken) && adminWebToken) return adminWebToken;
+  return "";
+}
+
 async function assertAdmin(data) {
-  if (!data || !data.adminWebToken) {
-    const error = new Error("请先填写后台访问令牌");
+  const token = resolveAdminWebToken(data);
+  if (!token) {
+    const error = new Error("请先登录后台");
     error.code = "FORBIDDEN";
     throw error;
   }
-  const result = await callBusiness({ action: "adminList", adminWebToken: data.adminWebToken });
+  const result = await callBusiness({ action: "adminList", adminWebToken: token });
   if (!result || !result.success) {
     const error = new Error((result && result.message) || "后台令牌校验失败");
     error.code = (result && result.code) || "FORBIDDEN";
     throw error;
   }
   return result;
+}
+
+function businessData(data) {
+  const token = resolveAdminWebToken(data);
+  const next = { ...data, adminWebToken: token };
+  delete next.adminSessionToken;
+  return next;
 }
 
 async function enrichAdminList(payload) {
@@ -273,7 +325,7 @@ async function saveCoverAfterBusiness(data, result) {
 
 async function adminProxyAction(data) {
   if (data.action === "adminList") {
-    const result = await callBusiness(data);
+    const result = await callBusiness(businessData(data));
     if (!result || !result.success) return result;
     return enrichAdminList(result);
   }
@@ -283,8 +335,26 @@ async function adminProxyAction(data) {
     if (data.action === "adminDeleteUser") return adminDeleteUser(data);
     return adminSaveUserCommunity(data);
   }
-  const result = await callBusiness(data);
+  const result = await callBusiness(businessData(data));
   return saveCoverAfterBusiness(data, result);
+}
+
+function login(data) {
+  if (!adminPassword) {
+    const error = new Error("服务器未配置 ADMIN_WEB_PASSWORD");
+    error.code = "LOGIN_NOT_CONFIGURED";
+    throw error;
+  }
+  if (String(data.username || "") !== adminUsername || String(data.password || "") !== adminPassword) {
+    const error = new Error("账号或密码不正确");
+    error.code = "LOGIN_FAILED";
+    throw error;
+  }
+  return {
+    success: true,
+    sessionToken: createSessionToken(adminUsername),
+    expiresInSeconds: 12 * 60 * 60,
+  };
 }
 
 async function adminUploadAsset(data) {
@@ -322,6 +392,10 @@ const server = http.createServer(async (request, response) => {
   try {
     if (request.method === "GET" && request.url === "/health") {
       return sendJson(response, 200, { success: true, env, region, functionName });
+    }
+    if (request.method === "POST" && request.url === "/api/login") {
+      const data = await readJson(request);
+      return sendJson(response, 200, login(data));
     }
     if (request.method === "POST" && request.url === "/api/upload") {
       const data = await readJson(request);

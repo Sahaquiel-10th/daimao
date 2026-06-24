@@ -22,10 +22,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: "npm"
@@ -55,6 +55,12 @@ jobs:
             git config --global http.version HTTP/1.1
             git pull --ff-only origin main
             bash scripts/deploy-admin-web-local.sh
-            curl -fsS http://127.0.0.1:8090/health
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              curl -fsS http://127.0.0.1:8090/health && exit 0
+              sleep 2
+            done
+            sudo systemctl status daimao-admin-api --no-pager
+            sudo journalctl -u daimao-admin-api -n 80 --no-pager
+            exit 1
           '
           EOF
