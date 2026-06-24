@@ -80,7 +80,7 @@ curl -sS http://127.0.0.1:8090/health
 在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 添加：
 
 ```text
-DEPLOY_HOST=服务器公网IP
+DEPLOY_HOST=124.222.88.31
 DEPLOY_USER=ubuntu
 DEPLOY_SSH_KEY=部署私钥内容
 ```
@@ -99,7 +99,23 @@ ssh-copy-id -i ~/.ssh/daimao_admin_deploy.pub ubuntu@服务器公网IP
 
 把私钥 `~/.ssh/daimao_admin_deploy` 的完整内容填进 GitHub Secret `DEPLOY_SSH_KEY`。
 
-以后推送到 `main` 分支且改动涉及 `admin-web/**` 时，会自动构建并发布。
+自动部署会使用这个 SSH key 登录服务器，然后执行：
+
+```bash
+sudo -H bash -lc 'cd /root/daimao && git pull --ff-only origin main && bash scripts/deploy-admin-web-local.sh'
+```
+
+所以服务器上的 `ubuntu` 用户需要能免密 `sudo`，腾讯云 Ubuntu 镜像默认通常满足这一点。
+
+以后推送到 `main` 分支且改动涉及以下路径时，会自动构建并发布：
+
+```text
+admin-web/**
+deploy/nginx/daimao-admin.conf
+deploy/systemd/daimao-admin-api.service
+scripts/deploy-admin-web-local.sh
+scripts/setup-admin-web-server.sh
+```
 
 ## 6. IP 访问和多项目
 

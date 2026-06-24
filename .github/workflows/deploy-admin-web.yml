@@ -2,6 +2,19 @@ name: Deploy Admin Web
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "admin-web/**"
+      - "deploy/nginx/daimao-admin.conf"
+      - "deploy/systemd/daimao-admin-api.service"
+      - "scripts/deploy-admin-web-local.sh"
+      - "scripts/setup-admin-web-server.sh"
+
+concurrency:
+  group: deploy-admin-web
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -24,9 +37,6 @@ jobs:
           npm ci
           npm run build
 
-      - name: Package dist
-        run: tar -czf /tmp/daimao-admin-dist.tgz -C admin-web/dist .
-
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -35,21 +45,16 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Upload package
-        run: |
-          scp -i ~/.ssh/deploy_key /tmp/daimao-admin-dist.tgz \
-            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/tmp/daimao-admin-dist.tgz"
-
-      - name: Activate release
+      - name: Deploy on server
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" <<'EOF'
           set -euo pipefail
-          DEPLOY_BASE="${DEPLOY_BASE:-/var/www/daimao-admin}"
-          RELEASE_ID="$(date +%Y%m%d%H%M%S)"
-          RELEASE_DIR="${DEPLOY_BASE}/releases/${RELEASE_ID}"
-          mkdir -p "$RELEASE_DIR"
-          tar -xzf /tmp/daimao-admin-dist.tgz -C "$RELEASE_DIR"
-          ln -sfnT "$RELEASE_DIR" "${DEPLOY_BASE}/current"
-          rm -f /tmp/daimao-admin-dist.tgz
-          find "${DEPLOY_BASE}/releases" -mindepth 1 -maxdepth 1 -type d | sort | head -n -5 | xargs -r rm -rf
+          sudo -H bash -lc '
+            set -euo pipefail
+            cd /root/daimao
+            git config --global http.version HTTP/1.1
+            git pull --ff-only origin main
+            bash scripts/deploy-admin-web-local.sh
+            curl -fsS http://127.0.0.1:8090/health
+          '
           EOF
