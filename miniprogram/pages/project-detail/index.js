@@ -96,11 +96,10 @@ Page({
       .request("applyProject", { projectId: this.data.projectId, request: application })
       .then((result) => {
         this.setData({ showApplyForm: false, application: { message: "", canOffer: "", relatedExperience: "" } });
-        const statusText = result.aiReviewStatus === "pass" ? "已递交主理人" : result.aiReviewStatus === "revise" ? "建议补充后再递交" : "已进入秘书审核";
-        wx.showModal({
-          title: statusText,
-          content: result.aiSummary || "小秘书已收到申请。",
-          showCancel: false,
+        wx.showToast({
+          title: result.queued ? "已提交，站内信通知结果" : "申请已提交",
+          icon: "none",
+          duration: 2200,
         });
       })
       .catch((err) => wx.showToast({ title: err.message, icon: "none" }))

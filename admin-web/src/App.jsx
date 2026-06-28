@@ -5,6 +5,7 @@ import {
   CalendarDays,
   CheckCircle2,
   Database,
+  FileText,
   Lock,
   RefreshCw,
   Search,
@@ -119,8 +120,6 @@ function userDraftFrom(user) {
     wechat: profile.wechat || "",
     intro: profile.intro || "",
     profileTags: (profile.tags || []).join(" "),
-    communityId: user?.communities?.[0]?.community_id || "",
-    communityTags: (user?.communities?.[0]?.tags || []).join(" "),
   };
 }
 
@@ -130,9 +129,33 @@ function communityDraftFrom(community) {
     name: community?.name || "",
     badgeName: community?.badge_name || "",
     logoUrl: community?.logo_url || "",
+    description: community?.description || "",
+    certificationMethod: community?.certification_method || "manual_review",
     status: community?.status || "active",
     sortWeight: Number(community?.sort_weight || 0),
   };
+}
+
+function emptyCommunityDraft() {
+  return {
+    id: null,
+    name: "",
+    badgeName: "",
+    logoUrl: "",
+    description: "",
+    certificationMethod: "manual_review",
+    status: "active",
+    sortWeight: 0,
+  };
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function App() {
@@ -146,7 +169,9 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState(null);
   const [userDraft, setUserDraft] = useState(null);
+  const [selectedCommunity, setSelectedCommunity] = useState(null);
   const [communityDraft, setCommunityDraft] = useState(null);
+  const [evidenceDraft, setEvidenceDraft] = useState(null);
   const [projectDraft, setProjectDraft] = useState(null);
   const [eventDraft, setEventDraft] = useState(emptyEvent);
   const [toast, setToast] = useState(null);
@@ -162,6 +187,13 @@ export default function App() {
         if (next) {
           setSelectedUser(next);
           setUserDraft(userDraftFrom(next));
+        }
+      }
+      if (selectedCommunity) {
+        const nextCommunity = (payload.communities || []).find((item) => Number(item.id) === Number(selectedCommunity.id));
+        if (nextCommunity) {
+          setSelectedCommunity(nextCommunity);
+          setCommunityDraft(communityDraftFrom(nextCommunity));
         }
       }
     } catch (err) {
@@ -188,7 +220,7 @@ export default function App() {
     const communities = data?.communities || [];
     return [
       { label: "活跃用户", value: users.filter((item) => item.status === "active").length, hint: `${users.length} 总用户` },
-      { label: "认证社区", value: communities.filter((item) => item.status !== "disabled").length, hint: "徽章与称号" },
+      { label: "认证社区", value: communities.filter((item) => item.status === "active").length, hint: "徽章与称号" },
       { label: "官方项目", value: projects.filter((item) => item.is_official_recommended).length, hint: "前 5 位展示" },
       { label: "活动", value: events.filter((item) => item.status === "published").length, hint: `${events.length} 总活动` },
     ];
@@ -206,6 +238,12 @@ export default function App() {
   const filteredCommunities = (data?.communities || []).filter((item) =>
     [item.name, item.badge_name, item.status].some((value) => String(value || "").includes(query))
   );
+  const communityMembers = useMemo(() => {
+    if (!selectedCommunity) return [];
+    return (data?.users || []).filter((user) =>
+      (user.communities || []).some((item) => Number(item.community_id) === Number(selectedCommunity.id) && item.status === "active")
+    );
+  }, [data, selectedCommunity]);
 
   async function run(action, payload, successMessage = "操作已完成") {
     setLoading(true);
@@ -214,10 +252,12 @@ export default function App() {
       await callAdmin(action, payload);
       await refresh();
       setToast({ type: "success", message: successMessage });
+      return true;
     } catch (err) {
       setError(err.message || "操作失败");
       setToast({ type: "error", message: err.message || "操作失败" });
       setLoading(false);
+      return false;
     }
   }
 
@@ -266,7 +306,13 @@ export default function App() {
   }
 
   function selectCommunity(community) {
+    setSelectedCommunity(community);
     setCommunityDraft(communityDraftFrom(community));
+  }
+
+  function createCommunity() {
+    setSelectedCommunity(null);
+    setCommunityDraft(emptyCommunityDraft());
   }
 
   if (!authed) {
@@ -406,6 +452,7 @@ export default function App() {
               <Modal title="用户编辑" onClose={() => { setSelectedUser(null); setUserDraft(null); }}>
                 <UserEditor
               draft={userDraft}
+              user={selectedUser}
               communities={data?.communities || []}
               onChange={setUserDraft}
               onSubmit={() =>
@@ -415,13 +462,21 @@ export default function App() {
                   patch: userDraft,
                 }, "用户资料已保存")
               }
-              onSaveCommunity={() =>
-                userDraft?.communityId &&
+              onSaveCommunity={(form) =>
+                userDraft?.id &&
+                form?.communityId &&
                 run("adminSaveUserCommunity", {
                   userId: userDraft.id,
-                  communityId: userDraft.communityId,
-                  tagsText: userDraft.communityTags,
+                  communityId: form.communityId,
+                  tagsText: form.tagsText,
                 }, "社区认证已保存")
+              }
+              onRevokeCommunity={(communityId) =>
+                userDraft?.id &&
+                run("adminRevokeUserCommunity", {
+                  userId: userDraft.id,
+                  communityId,
+                }, "社区认证已撤销")
               }
               onDelete={() => {
                 if (!userDraft) return;
@@ -439,23 +494,92 @@ export default function App() {
         )}
 
         {activeTab === "communities" && (
-          <section className="split-view">
+          <section className="content-grid">
             <section className="panel dm-card">
-              <h3>社区与徽章</h3>
+              <div className="panel-title-row">
+                <h3>社区与徽章</h3>
+                <button onClick={createCommunity}>新建社区</button>
+              </div>
               <CommunityTable communities={filteredCommunities} onEdit={selectCommunity} />
             </section>
-            <CommunityEditor
-              draft={communityDraft}
-              onChange={setCommunityDraft}
-              onUpload={(file) => upload("community-logo", file, (fileID) => setCommunityDraft((draft) => ({ ...draft, logoUrl: fileID })))}
-              onSubmit={() =>
-                communityDraft &&
-                run("adminUpdateCommunity", {
-                  communityId: communityDraft.id,
-                  patch: communityDraft,
-                }, "社区资料已保存")
-              }
-            />
+            <section className="community-layout">
+              <CommunityEditor
+                draft={communityDraft}
+                onChange={setCommunityDraft}
+                onUpload={(file) => upload("community-logo", file, (fileID) => setCommunityDraft((draft) => ({ ...draft, logoUrl: fileID })))}
+                onSubmit={() =>
+                  communityDraft &&
+                  run("adminUpdateCommunity", {
+                    communityId: communityDraft.id,
+                    patch: communityDraft,
+                  }, communityDraft.id ? "社区资料已保存" : "社区已创建")
+                }
+              />
+              <CommunityMembers
+                community={selectedCommunity}
+                members={communityMembers}
+                allUsers={data?.users || []}
+                onCertify={(form) =>
+                  selectedCommunity &&
+                  run("adminSaveUserCommunity", {
+                    userId: form.userId,
+                    communityId: selectedCommunity.id,
+                    tagsText: form.tagsText,
+                  }, "社区成员已认证")
+                }
+                onRevoke={(userId) =>
+                  selectedCommunity &&
+                  run("adminRevokeUserCommunity", {
+                    userId,
+                    communityId: selectedCommunity.id,
+                  }, "成员认证已撤销")
+                }
+                onCreateEvidence={(member) =>
+                  setEvidenceDraft({
+                    userId: member.id,
+                    userName: member.display_name || member.profile?.name || member.id,
+                    communityId: selectedCommunity?.id,
+                    communityName: selectedCommunity?.name,
+                    title: `社区证据：${member.display_name || member.profile?.name || member.id}`,
+                    evidenceType: "admin_evidence",
+                    confidence: 0.9,
+                    content: "",
+                    file: null,
+                  })
+                }
+              />
+            </section>
+            {evidenceDraft && (
+              <Modal title="上传社区成员证据" onClose={() => setEvidenceDraft(null)}>
+                <CommunityEvidenceEditor
+                  draft={evidenceDraft}
+                  onChange={setEvidenceDraft}
+                  onFile={async (file) => {
+                    const dataUrl = await readFileAsDataUrl(file);
+                    setEvidenceDraft((draft) => ({
+                      ...draft,
+                      file: {
+                        filename: file.name,
+                        contentType: file.type,
+                        dataUrl,
+                      },
+                    }));
+                  }}
+                  onSubmit={() =>
+                    evidenceDraft &&
+                    run("adminCreateCommunityMemberEvidence", {
+                      userId: evidenceDraft.userId,
+                      communityId: evidenceDraft.communityId,
+                      evidenceType: evidenceDraft.evidenceType,
+                      title: evidenceDraft.title,
+                      content: evidenceDraft.content,
+                      confidence: evidenceDraft.confidence,
+                      file: evidenceDraft.file,
+                    }, "证据已写入，等待 RAG 索引").then((ok) => ok && setEvidenceDraft(null))
+                  }
+                />
+              </Modal>
+            )}
           </section>
         )}
 
@@ -587,7 +711,8 @@ function Modal({ title, children, onClose }) {
   );
 }
 
-function UserEditor({ draft, communities, onChange, onSubmit, onSaveCommunity, onDelete }) {
+function UserEditor({ draft, user, communities, onChange, onSubmit, onSaveCommunity, onRevokeCommunity, onDelete }) {
+  const [communityForm, setCommunityForm] = useState({ communityId: "", tagsText: "" });
   if (!draft) {
     return (
       <aside className="panel editor-panel dm-card">
@@ -634,8 +759,22 @@ function UserEditor({ draft, communities, onChange, onSubmit, onSaveCommunity, o
       </Field>
       <button className="primary-button" onClick={onSubmit}>保存用户资料</button>
       <div className="editor-divider" />
-      <Field label="认证社区">
-        <select value={draft.communityId} onChange={(event) => onChange({ ...draft, communityId: event.target.value })}>
+      <section className="embedded-section">
+        <h4>社区认证</h4>
+        <div className="cert-list">
+          {(user?.communities || []).length ? (user.communities || []).map((item) => (
+            <div className="cert-item" key={`${item.community_id}-${item.id || item.communityName}`}>
+              <div>
+                <strong>{item.communityName || item.badgeName || item.community_id}</strong>
+                <span>{(item.tags || []).join(" / ") || "暂无社区标签"}</span>
+              </div>
+              <button type="button" onClick={() => onRevokeCommunity(item.community_id)}>撤销</button>
+            </div>
+          )) : <p className="muted small-muted">还没有社区认证。</p>}
+        </div>
+      </section>
+      <Field label="新增认证社区">
+        <select value={communityForm.communityId} onChange={(event) => setCommunityForm({ ...communityForm, communityId: event.target.value })}>
           <option value="">选择社区</option>
           {communities.map((item) => (
             <option key={item.id} value={item.id}>{item.name}</option>
@@ -643,9 +782,9 @@ function UserEditor({ draft, communities, onChange, onSubmit, onSaveCommunity, o
         </select>
       </Field>
       <Field label="社区称号/能力标签">
-        <input value={draft.communityTags} onChange={(event) => onChange({ ...draft, communityTags: event.target.value })} placeholder="如 AI产品 需求梳理" />
+        <input value={communityForm.tagsText} onChange={(event) => setCommunityForm({ ...communityForm, tagsText: event.target.value })} placeholder="如 AI产品 需求梳理" />
       </Field>
-      <button onClick={onSaveCommunity}>保存社区认证</button>
+      <button onClick={() => onSaveCommunity(communityForm)}>保存社区认证</button>
     </div>
   );
 }
@@ -703,6 +842,9 @@ function CommunityEditor({ draft, onChange, onSubmit, onUpload }) {
       <Field label="徽章名称">
         <input value={draft.badgeName} onChange={(event) => onChange({ ...draft, badgeName: event.target.value })} />
       </Field>
+      <Field label="社区说明">
+        <textarea value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} />
+      </Field>
       <Field label="社区 logo / cloud fileID">
         <div className="asset-row">
           <input value={draft.logoUrl} onChange={(event) => onChange({ ...draft, logoUrl: event.target.value })} placeholder="cloud://..." />
@@ -712,14 +854,112 @@ function CommunityEditor({ draft, onChange, onSubmit, onUpload }) {
       <Field label="状态">
         <select value={draft.status} onChange={(event) => onChange({ ...draft, status: event.target.value })}>
           <option value="active">启用</option>
-          <option value="disabled">禁用</option>
+          <option value="paused">暂停</option>
+          <option value="archived">归档</option>
+        </select>
+      </Field>
+      <Field label="认证方式">
+        <select value={draft.certificationMethod} onChange={(event) => onChange({ ...draft, certificationMethod: event.target.value })}>
+          <option value="manual_review">人工审核</option>
+          <option value="review_meeting">评审会通过</option>
+          <option value="paid_event">参加付费活动</option>
+          <option value="admin_invite">管理员邀请</option>
+          <option value="custom">自定义</option>
         </select>
       </Field>
       <Field label="排序权重">
         <input type="number" value={draft.sortWeight} onChange={(event) => onChange({ ...draft, sortWeight: event.target.value })} />
       </Field>
-      <button className="primary-button" onClick={onSubmit}>保存社区</button>
+      <button className="primary-button" onClick={onSubmit}>{draft.id ? "保存社区" : "创建社区"}</button>
     </aside>
+  );
+}
+
+function CommunityMembers({ community, members, allUsers, onCertify, onRevoke, onCreateEvidence }) {
+  const [form, setForm] = useState({ userId: "", tagsText: "" });
+  if (!community) {
+    return (
+      <section className="panel editor-panel dm-card">
+        <h3>社区成员</h3>
+        <p className="muted">选择一个社区后，可以查看成员、添加认证、上传密封证据。</p>
+      </section>
+    );
+  }
+  const activeIds = new Set(members.map((item) => Number(item.id)));
+  const candidateUsers = allUsers.filter((item) => !activeIds.has(Number(item.id)));
+  return (
+    <section className="panel editor-panel dm-card">
+      <h3>{community.name} · 成员</h3>
+      <div className="member-tools">
+        <Field label="添加认证成员">
+          <select value={form.userId} onChange={(event) => setForm({ ...form, userId: event.target.value })}>
+            <option value="">选择用户</option>
+            {candidateUsers.map((item) => (
+              <option key={item.id} value={item.id}>{item.display_name || item.profile?.name || item.openid || item.id}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="社区标签">
+          <input value={form.tagsText} onChange={(event) => setForm({ ...form, tagsText: event.target.value })} placeholder="如 技术验证 项目推进" />
+        </Field>
+        <button type="button" onClick={() => onCertify(form)}>添加认证</button>
+      </div>
+      <div className="member-list">
+        {members.length ? members.map((member) => {
+          const membership = (member.communities || []).find((item) => Number(item.community_id) === Number(community.id)) || {};
+          return (
+            <div className="member-card" key={member.id}>
+              <div className="user-cell">
+                {member.avatar_url ? <img className="avatar" src={member.avatar_url} alt="" /> : <span className="avatar text-avatar">{firstText(member.display_name || member.profile?.name)}</span>}
+                <div className="title-stack">
+                  <strong>{member.display_name || member.profile?.name || "-"}</strong>
+                  <span>{member.profile?.job || member.openid}</span>
+                  <span>{(membership.tags || []).join(" / ") || "暂无社区标签"}</span>
+                </div>
+              </div>
+              <div className="member-actions">
+                <button type="button" onClick={() => onCreateEvidence(member)}><FileText size={14} />上传证据</button>
+                <button type="button" onClick={() => onRevoke(member.id)}>撤销认证</button>
+              </div>
+            </div>
+          );
+        }) : <p className="muted">当前社区还没有 active 成员。</p>}
+      </div>
+    </section>
+  );
+}
+
+function CommunityEvidenceEditor({ draft, onChange, onFile, onSubmit }) {
+  return (
+    <div className="editor-panel embedded-editor">
+      <p className="muted">
+        给 {draft.userName} 写入 {draft.communityName} 的密封证据。内容会进入 SQL，并生成 RAG 索引任务；AI 召回时只使用正文，元数据不会直接喂给模型。
+      </p>
+      <Field label="标题">
+        <input value={draft.title} onChange={(event) => onChange({ ...draft, title: event.target.value })} />
+      </Field>
+      <Field label="证据类型">
+        <select value={draft.evidenceType} onChange={(event) => onChange({ ...draft, evidenceType: event.target.value })}>
+          <option value="admin_evidence">管理员上传证据</option>
+          <option value="admin_interview">管理员访谈记录</option>
+          <option value="admin_note">管理员备注</option>
+          <option value="risk_note">风险备注</option>
+        </select>
+      </Field>
+      <Field label="可信度">
+        <input type="number" min="0" max="1" step="0.01" value={draft.confidence} onChange={(event) => onChange({ ...draft, confidence: event.target.value })} />
+      </Field>
+      <Field label="文本内容">
+        <textarea value={draft.content} onChange={(event) => onChange({ ...draft, content: event.target.value })} placeholder="可以直接粘贴主理人评价、管理员备注、访谈纪要等。" />
+      </Field>
+      <Field label="上传文本文件">
+        <label className="upload-button wide-upload">
+          {draft.file?.filename || "选择 txt / md / docx / pdf"}
+          <input type="file" accept=".txt,.md,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => event.target.files?.[0] && onFile(event.target.files[0])} />
+        </label>
+      </Field>
+      <button className="primary-button" onClick={onSubmit}>写入证据并排队索引</button>
+    </div>
   );
 }
 

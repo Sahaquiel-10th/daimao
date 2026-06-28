@@ -362,6 +362,19 @@ th {
   font-weight: 950;
 }
 
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 14px;
+  border-bottom: 3px solid #23211f;
+}
+
+.panel-title-row h3 {
+  border-bottom: 0;
+}
+
 .panel > .muted {
   padding: 16px;
   margin: 0;
@@ -370,6 +383,13 @@ th {
 .split-view {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 390px;
+  gap: 18px;
+  align-items: start;
+}
+
+.community-layout {
+  display: grid;
+  grid-template-columns: 390px minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
@@ -453,6 +473,47 @@ th {
   background: #23211f;
 }
 
+.embedded-section {
+  margin: 14px 16px 0;
+}
+
+.embedded-section h4 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.small-muted {
+  margin: 0;
+  font-size: 12px;
+}
+
+.cert-list {
+  display: grid;
+  gap: 8px;
+}
+
+.cert-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 70px;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 2px solid #23211f;
+  border-radius: 10px;
+  background: #fff8e8;
+}
+
+.cert-item div {
+  display: grid;
+  gap: 2px;
+}
+
+.cert-item span {
+  color: #6f6a63;
+  font-size: 12px;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -485,6 +546,50 @@ th {
   inset: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+.wide-upload {
+  width: 100%;
+  min-height: 42px;
+}
+
+.member-tools {
+  padding: 14px 16px;
+  border-bottom: 2px solid #ede5da;
+  display: grid;
+  grid-template-columns: minmax(180px, 1.1fr) minmax(180px, 1fr) 110px;
+  gap: 10px;
+  align-items: end;
+}
+
+.member-list {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+
+.member-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 2px solid #23211f;
+  border-radius: 12px;
+  background: #fffdfa;
+}
+
+.member-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.member-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .field span,

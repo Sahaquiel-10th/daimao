@@ -7,6 +7,7 @@ const Ajv = require("ajv");
 const mammoth = require("mammoth");
 const pdfParse = require("pdf-parse");
 const aiOutputSchema = require("./ai-schema");
+const defaultPrompts = require("./prompts");
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
@@ -18,16 +19,35 @@ const VECTOR_SEARCH_URL = process.env.VECTOR_SEARCH_URL || "";
 const VECTOR_UPSERT_URL = process.env.VECTOR_UPSERT_URL || "";
 const VECTOR_SEARCH_API_KEY = process.env.VECTOR_SEARCH_API_KEY || "";
 const VECTOR_UPSERT_API_KEY = process.env.VECTOR_UPSERT_API_KEY || VECTOR_SEARCH_API_KEY;
-const SECRETARY_PROJECT_REVIEW_PROMPT = process.env.SECRETARY_PROJECT_REVIEW_PROMPT || "";
+const VECTOR_PROVIDER = (process.env.VECTOR_PROVIDER || "http_adapter").toLowerCase();
+const VECTOR_COLLECTION = process.env.VECTOR_COLLECTION || "daimao_rag_chunks";
+const VECTOR_NAMESPACE = process.env.VECTOR_NAMESPACE || "default";
+const REAI_VDB_BASE_URL = process.env.REAI_VDB_BASE_URL || "https://api.cn.reai.com";
+const REAI_VDB_PID = process.env.REAI_VDB_PID || "";
+const REAI_VDB_ID = process.env.REAI_VDB_ID || "";
+const REAI_API_KEY = process.env.REAI_API_KEY || VECTOR_SEARCH_API_KEY;
+const REAI_VDB_UPSERT_URL = process.env.REAI_VDB_UPSERT_URL || "";
+const REAI_USER_TAG_PREFIX = process.env.REAI_USER_TAG_PREFIX || "daimao_user_";
+const SECRETARY_PROJECT_REVIEW_PROMPT = process.env.SECRETARY_PROJECT_REVIEW_PROMPT || defaultPrompts.PROJECT_REVIEW_PROMPT;
+const SECRETARY_RETRIEVAL_PROMPT = process.env.SECRETARY_RETRIEVAL_PROMPT || defaultPrompts.RETRIEVAL_PROMPT;
 const VECTOR_TOP_K = Math.min(Math.max(Number(process.env.VECTOR_TOP_K || 4), 1), 10);
+const RAG_RETRIEVAL_QUERY_COUNT = Math.min(Math.max(Number(process.env.RAG_RETRIEVAL_QUERY_COUNT || 6), 5), 6);
+const RAG_RETRIEVAL_TOP_K = Math.min(Math.max(Number(process.env.RAG_RETRIEVAL_TOP_K || 3), 1), 3);
 const RAG_MAX_CHUNK_CHARS = Math.min(Math.max(Number(process.env.RAG_MAX_CHUNK_CHARS || 700), 300), 1200);
 const RAG_CHUNK_OVERLAP_CHARS = Math.min(Math.max(Number(process.env.RAG_CHUNK_OVERLAP_CHARS || 80), 0), 200);
 const MYSQL_CONNECT_TIMEOUT = Number(process.env.MYSQL_CONNECT_TIMEOUT || 20000);
+const AI_BASE_URL = process.env.AI_BASE_URL || process.env.YYLX_BASE_URL || "https://app.yylx.io/v1";
+const AI_API_KEY = process.env.AI_API_KEY || process.env.YYLX_API_KEY || "";
+const AI_MODEL = process.env.AI_MODEL || process.env.YYLX_MODEL || "";
+const AI_TEMPERATURE = Math.min(Math.max(Number(process.env.AI_TEMPERATURE || 0.1), 0), 1);
+const AI_REQUEST_TIMEOUT_MS = Math.min(Math.max(Number(process.env.AI_REQUEST_TIMEOUT_MS || 25000), 5000), 55000);
+const VECTOR_REQUEST_TIMEOUT_MS = Math.min(Math.max(Number(process.env.VECTOR_REQUEST_TIMEOUT_MS || 12000), 3000), 30000);
 const ajv = new Ajv({ allErrors: true, strict: true, allowUnionTypes: true });
 const validateAiOutput = ajv.compile(aiOutputSchema);
 let pool;
 let cloudbaseApp;
 let rdbClient;
+const userRagTagCache = new Map();
 
 function getPool() {
   if (!pool) {
@@ -86,6 +106,16 @@ async function rdbSelect(table, columns = "*", build) {
   return result.data || [];
 }
 
+function withTimeout(promise, timeoutMs, code, message) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(codedError(code, message)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function rdbInsert(table, values, options) {
   const result = assertRdb(await getRdb().from(table).insert(values, options), `新增 ${table}`);
   return result.data || [];
@@ -98,6 +128,13 @@ async function rdbUpdate(table, values, build) {
   return result.data || null;
 }
 
+async function rdbDelete(table, build) {
+  let request = getRdb().from(table).delete();
+  if (build) request = build(request);
+  const result = assertRdb(await request, `删除 ${table}`);
+  return result.data || null;
+}
+
 async function rdbUpsert(table, values, options) {
   const result = assertRdb(await getRdb().from(table).upsert(values, options), `保存 ${table}`);
   return result.data || [];
@@ -105,6 +142,43 @@ async function rdbUpsert(table, values, options) {
 
 function text(value, max = 5000) {
   return String(value || "").trim().slice(0, max);
+}
+
+function decodeDataUrl(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:([^;]+);base64,([\s\S]+)$/);
+  if (!match) throw codedError("VALIDATION_ERROR", "上传文件内容格式不正确");
+  return {
+    contentType: match[1],
+    buffer: Buffer.from(match[2], "base64"),
+  };
+}
+
+function fileExt(filename, contentType) {
+  const ext = String(filename || "").toLowerCase().match(/\.([a-z0-9]+)$/);
+  if (ext) return ext[1];
+  if (/markdown/.test(contentType || "")) return "md";
+  if (/text\//.test(contentType || "")) return "txt";
+  if (/wordprocessingml/.test(contentType || "")) return "docx";
+  if (/pdf/.test(contentType || "")) return "pdf";
+  return "";
+}
+
+async function extractEvidenceFileText(file) {
+  if (!file || !file.dataUrl) return "";
+  const { contentType, buffer } = decodeDataUrl(file.dataUrl);
+  if (buffer.length > MAX_FILE_SIZE) throw codedError("VALIDATION_ERROR", "证据文件不能超过 10MB");
+  const ext = fileExt(file.filename, contentType);
+  if (!ALLOWED_FILE_TYPES.has(ext)) throw codedError("VALIDATION_ERROR", "证据文件仅支持 txt、md、docx、pdf");
+  if (ext === "txt" || ext === "md") return buffer.toString("utf8").trim();
+  if (ext === "docx") {
+    const result = await mammoth.extractRawText({ buffer });
+    return text(result.value, 120000);
+  }
+  if (ext === "pdf") {
+    const result = await pdfParse(buffer);
+    return text(result.text, 120000);
+  }
+  return "";
 }
 
 function id(value) {
@@ -145,9 +219,27 @@ function unique(items) {
   return Array.from(new Set(list.map((item) => text(item, 80)).filter(Boolean)));
 }
 
+function parseList(value) {
+  if (Array.isArray(value)) return unique(value);
+  return unique(String(value || "").split(/[,\s]+/));
+}
+
 function truncate(value, max = 180) {
   const normalized = String(value || "").replace(/\s+/g, " ").trim();
   return normalized.length > max ? `${normalized.slice(0, max - 1)}…` : normalized;
+}
+
+function trimTrailingSlash(value) {
+  return String(value || "").replace(/\/+$/, "");
+}
+
+function generateReaiTagId(prefix = "") {
+  const suffix = crypto.randomBytes(6).toString("base64url").replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
+  return text(`${prefix}${suffix}`, 40);
+}
+
+function nowDateTime() {
+  return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
 
 function splitChunks(value, maxChars = RAG_MAX_CHUNK_CHARS, overlapChars = RAG_CHUNK_OVERLAP_CHARS) {
@@ -195,7 +287,24 @@ function confidenceForSource(sourceType, polarity) {
 }
 
 function ragVisibility(value) {
-  return ["private", "match_only", "project_visible", "public", "admin_only"].includes(value) ? value : "match_only";
+  return ["private", "profile_visible", "agent_chat", "match_only", "project_visible", "public", "admin_only", "sealed"].includes(value)
+    ? value
+    : "match_only";
+}
+
+function ragSourceTrust(value) {
+  return [
+    "self_reported",
+    "system_observed",
+    "owner_review",
+    "admin_note",
+    "admin_interview",
+    "verified_record",
+    "transcript_raw",
+    "transcript_verified",
+  ].includes(value)
+    ? value
+    : "self_reported";
 }
 
 async function query(sql, params = []) {
@@ -241,6 +350,29 @@ async function healthCheck() {
     return {
       driver: "cloudbase_rdb",
       database: process.env.MYSQL_DATABASE || process.env.CLOUDBASE_RDB_DATABASE || "",
+      vector: {
+        provider: VECTOR_PROVIDER,
+        collection: VECTOR_COLLECTION,
+        namespace: VECTOR_NAMESPACE,
+        searchConfigured: vectorSearchConfigured(),
+        upsertConfigured: vectorUpsertConfigured(),
+        reai: VECTOR_PROVIDER === "reai_vdb" ? {
+          baseUrl: REAI_VDB_BASE_URL,
+          pidConfigured: Boolean(REAI_VDB_PID),
+          vdbIdConfigured: Boolean(REAI_VDB_ID),
+          defaultTags: getReaiDefaultTags(),
+          apiKeyConfigured: Boolean(REAI_API_KEY),
+          explicitUpsertUrlConfigured: Boolean(REAI_VDB_UPSERT_URL),
+        } : undefined,
+      },
+      ai: {
+        configured: aiConfigured(),
+        baseUrl: AI_BASE_URL,
+        modelConfigured: Boolean(AI_MODEL),
+        apiKeyConfigured: Boolean(AI_API_KEY),
+        retrievalQueryCount: RAG_RETRIEVAL_QUERY_COUNT,
+        retrievalTopK: RAG_RETRIEVAL_TOP_K,
+      },
       tableCount: null,
       requiredTables: expectedTables,
       existingTables: checks.filter((item) => item.ok).map((item) => item.table),
@@ -278,6 +410,82 @@ async function healthCheck() {
     requiredTables: expectedTables,
     existingTables: existing,
     missingTables: expectedTables.filter((name) => !existing.includes(name))
+  };
+}
+
+async function testAiConnection(event) {
+  if (event.confirm !== "test-ai-connection") {
+    throw codedError("CONFIRM_REQUIRED", "请传入 confirm=test-ai-connection 后再测试 AI");
+  }
+  const generated = await callAi({
+    task: "ai_connection_test",
+    instruction: "你是接口连通性测试助手。只返回JSON: {\"ok\":true,\"message\":\"不超过30字\"}",
+    schema: {
+      type: "object",
+      required: ["ok", "message"],
+      properties: {
+        ok: { type: "boolean" },
+        message: { type: "string" },
+      },
+    },
+    payload: { ping: "daimao", time: new Date().toISOString() },
+  });
+  return {
+    aiConfigured: aiConfigured(),
+    baseUrl: AI_BASE_URL,
+    model: AI_MODEL,
+    result: generated,
+  };
+}
+
+function assertAdminWebToken(event) {
+  if (!event.adminWebToken || !process.env.ADMIN_WEB_TOKEN || event.adminWebToken !== process.env.ADMIN_WEB_TOKEN) {
+    throw codedError("FORBIDDEN", "管理员网页令牌不正确");
+  }
+}
+
+async function adminDebugDirectSqlSmoke(event) {
+  assertAdminWebToken(event);
+  const projectId = id(event.projectId || 1);
+  const applicantUserId = id(event.applicantUserId || event.userId || 1);
+  const startedAt = Date.now();
+  if (useRdb()) {
+    const [projects, applicants, admins] = await withTimeout(
+      Promise.all([
+        rdbSelect("projects", "id,name,status,visibility", (request) => request.eq("id", projectId).limit(1)),
+        rdbSelect("users", "id,openid,display_name,status,is_admin,experience_points", (request) => request.eq("id", applicantUserId).limit(1)),
+        rdbSelect("users", "id,display_name,status,is_admin", (request) =>
+          request.eq("status", "active").eq("is_admin", 1).order("id", { ascending: true }).limit(1)
+        ),
+      ]),
+      8000,
+      "DEBUG_SQL_TIMEOUT",
+      "CloudBase RDB 诊断查询超过 8 秒"
+    );
+    return {
+      elapsedMs: Date.now() - startedAt,
+      driver: "cloudbase_rdb",
+      project: projects[0] || null,
+      applicant: applicants[0] || null,
+      admin: admins[0] || null,
+    };
+  }
+  const [projects, applicants, admins] = await withTimeout(
+    Promise.all([
+      query("SELECT id,name,status,visibility FROM projects WHERE id=? LIMIT 1", [projectId]),
+      query("SELECT id,openid,display_name,status,is_admin,experience_points FROM users WHERE id=? LIMIT 1", [applicantUserId]),
+      query("SELECT id,display_name,status,is_admin FROM users WHERE status='active' AND is_admin=1 ORDER BY id ASC LIMIT 1"),
+    ]),
+    8000,
+    "DEBUG_SQL_TIMEOUT",
+    "MySQL 诊断查询超过 8 秒"
+  );
+  return {
+    elapsedMs: Date.now() - startedAt,
+    driver: "mysql",
+    project: projects[0] || null,
+    applicant: applicants[0] || null,
+    admin: admins[0] || null,
   };
 }
 
@@ -674,13 +882,14 @@ async function upsertRagSource(connection, source) {
   if (existingRows[0] && existingRows[0].text_hash !== hash) version += 1;
   if (sourceRowId && existingRows[0].text_hash === hash) {
     await connection.execute(
-      `UPDATE rag_sources SET title=?,summary=?,tags_json=?,visibility=?,status='pending',metadata_json=?,updated_at=NOW()
+      `UPDATE rag_sources SET title=?,summary=?,tags_json=?,visibility=?,source_trust=?,status='pending',metadata_json=?,updated_at=NOW()
        WHERE id=?`,
       [
         text(source.title, 180),
         text(source.summary, 3000),
         json(tags),
         ragVisibility(source.visibility),
+        ragSourceTrust(source.sourceTrust || metadata.source_trust),
         json(metadata, {}),
         sourceRowId,
       ]
@@ -689,8 +898,8 @@ async function upsertRagSource(connection, source) {
   } else {
     const [result] = await connection.execute(
       `INSERT INTO rag_sources
-       (source_type,source_id,owner_user_id,project_id,event_id,community_id,title,summary,tags_json,visibility,status,version,text_hash,metadata_json)
-       VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?,?,?)`,
+       (source_type,source_id,owner_user_id,project_id,event_id,community_id,title,summary,tags_json,visibility,source_trust,status,version,text_hash,metadata_json)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?)`,
       [
         sourceType,
         sourceId,
@@ -702,6 +911,7 @@ async function upsertRagSource(connection, source) {
         text(source.summary, 3000),
         json(tags),
         ragVisibility(source.visibility),
+        ragSourceTrust(source.sourceTrust || metadata.source_trust),
         version,
         hash,
         json(metadata, {}),
@@ -739,10 +949,85 @@ async function upsertRagSource(connection, source) {
   return { sourceId: sourceRowId, chunks: chunks.length };
 }
 
+async function upsertRagSourceRdb(source) {
+  const content = text(source.content, 120000);
+  if (!content) return null;
+  const sourceType = text(source.sourceType, 40);
+  const sourceId = Number(source.sourceId);
+  if (!sourceType || !Number.isSafeInteger(sourceId) || sourceId <= 0) return null;
+  const tags = unique(source.tags || []);
+  const metadata = source.metadata || {};
+  const hash = sha256(content);
+  const existingRows = await rdbSelect("rag_sources", "*", (request) =>
+    request.eq("source_type", sourceType).eq("source_id", sourceId).order("version", { ascending: false }).limit(1)
+  );
+  const existing = existingRows[0];
+  let sourceRowId = existing && existing.id;
+  let version = existing ? Number(existing.version || 1) : 1;
+  const payload = {
+    source_type: sourceType,
+    source_id: sourceId,
+    owner_user_id: source.ownerUserId || null,
+    project_id: source.projectId || null,
+    event_id: source.eventId || null,
+    community_id: source.communityId || null,
+    title: text(source.title, 180),
+    summary: text(source.summary, 3000),
+    tags_json: json(tags),
+    visibility: ragVisibility(source.visibility),
+    source_trust: ragSourceTrust(source.sourceTrust || metadata.source_trust),
+    status: "pending",
+    text_hash: hash,
+    metadata_json: json(metadata, {}),
+  };
+  if (existing && existing.text_hash !== hash) version += 1;
+  payload.version = version;
+  if (sourceRowId && existing.text_hash === hash) {
+    await rdbUpdate("rag_sources", payload, (request) => request.eq("id", sourceRowId));
+    await rdbDelete("rag_chunks", (request) => request.eq("source_id", sourceRowId));
+  } else {
+    await rdbInsert("rag_sources", payload);
+    const created = await rdbSelect("rag_sources", "id", (request) =>
+      request.eq("source_type", sourceType).eq("source_id", sourceId).eq("version", version).limit(1)
+    );
+    sourceRowId = created[0] && created[0].id;
+  }
+  if (!sourceRowId) throw codedError("RAG_SOURCE_CREATE_FAILED", "RAG source 写入后未能读回");
+  const chunks = splitChunks(content);
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+    const polarity = detectPolarity(chunk);
+    await rdbInsert("rag_chunks", {
+      source_id: sourceRowId,
+      chunk_index: index,
+      content: chunk,
+      content_summary: truncate(chunk, 240),
+      vector_doc_id: `rag_${sourceRowId}_${index}`,
+      evidence_polarity: polarity,
+      confidence: confidenceForSource(sourceType, polarity),
+      status: "pending",
+    });
+  }
+  await rdbInsert("rag_index_jobs", {
+    source_id: sourceRowId,
+    job_type: "upsert",
+    status: "pending",
+  });
+  return { sourceId: sourceRowId, chunks: chunks.length };
+}
+
+async function upsertRagSourceForCurrentDriver(source) {
+  if (useRdb()) return upsertRagSourceRdb(source);
+  return transaction((connection) => upsertRagSource(connection, source));
+}
+
 async function currentUser(event = {}) {
   const context = cloud.getWXContext();
   const openid = context.FROM_OPENID || context.OPENID;
-  if (event.adminWebToken && process.env.ADMIN_WEB_TOKEN && event.adminWebToken === process.env.ADMIN_WEB_TOKEN) {
+  if (event.adminWebToken) {
+    if (!process.env.ADMIN_WEB_TOKEN || event.adminWebToken !== process.env.ADMIN_WEB_TOKEN) {
+      throw codedError("FORBIDDEN", "管理员网页令牌不正确");
+    }
     const buildAdminQuery = (request) => {
       const base = request.eq("status", "active").eq("is_admin", 1);
       return process.env.ADMIN_WEB_OPENID
@@ -756,7 +1041,7 @@ async function currentUser(event = {}) {
            WHERE status='active' AND is_admin=1 ${process.env.ADMIN_WEB_OPENID ? "AND openid=?" : ""}
            ORDER BY id ASC LIMIT 1`,
           process.env.ADMIN_WEB_OPENID ? [process.env.ADMIN_WEB_OPENID] : []
-        );
+    );
     if (!admins[0]) throw codedError("FORBIDDEN", "未找到可用于网页后台的管理员账号");
     return admins[0];
   }
@@ -824,6 +1109,78 @@ async function getCommunityMemberships(userId) {
     console.warn("community tables unavailable", err.message);
     return [];
   }
+}
+
+async function getActiveUserRagTag(userId) {
+  const numericUserId = Number(userId || 0);
+  if (!numericUserId) return null;
+  const cacheKey = `${VECTOR_PROVIDER}:${numericUserId}`;
+  if (userRagTagCache.has(cacheKey)) return userRagTagCache.get(cacheKey);
+  try {
+    const rows = useRdb()
+      ? await rdbSelect("user_rag_tags", "*", (request) =>
+          request.eq("user_id", numericUserId).eq("provider", "reai_vdb").eq("status", "active").limit(1)
+        )
+      : await query("SELECT * FROM user_rag_tags WHERE user_id=? AND provider='reai_vdb' AND status='active' LIMIT 1", [numericUserId]);
+    const tag = rows[0] || null;
+    userRagTagCache.set(cacheKey, tag);
+    return tag;
+  } catch (err) {
+    console.warn("user_rag_tags unavailable", err.message);
+    userRagTagCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+async function saveUserRagTagRecord({ userId, userTagId, tagName, status = "active", createdReason = "admin" }) {
+  const numericUserId = id(userId);
+  const payload = {
+    user_id: numericUserId,
+    provider: "reai_vdb",
+    project_tag_id: getReaiDefaultTags()[0] || "",
+    user_tag_id: text(userTagId, 80),
+    tag_name: text(tagName, 120),
+    status,
+    created_reason: text(createdReason, 60),
+    error_message: null,
+  };
+  if (!payload.user_tag_id) throw codedError("VALIDATION_ERROR", "userTagId 不能为空");
+  if (!payload.tag_name) payload.tag_name = `${REAI_USER_TAG_PREFIX}${numericUserId}`;
+
+  if (useRdb()) {
+    const existing = await rdbSelect("user_rag_tags", "*", (request) =>
+      request.eq("user_id", numericUserId).eq("provider", "reai_vdb").limit(1)
+    );
+    if (existing[0]) {
+      await rdbUpdate("user_rag_tags", payload, (request) => request.eq("id", existing[0].id));
+    } else {
+      await rdbInsert("user_rag_tags", payload);
+    }
+    userRagTagCache.delete(`reai_vdb:${numericUserId}`);
+    return (await rdbSelect("user_rag_tags", "*", (request) =>
+      request.eq("user_id", numericUserId).eq("provider", "reai_vdb").limit(1)
+    ))[0];
+  }
+
+  await query(
+    `INSERT INTO user_rag_tags
+     (user_id,provider,project_tag_id,user_tag_id,tag_name,status,created_reason,error_message)
+     VALUES (?,?,?,?,?,?,?,NULL)
+     ON DUPLICATE KEY UPDATE project_tag_id=VALUES(project_tag_id),user_tag_id=VALUES(user_tag_id),
+       tag_name=VALUES(tag_name),status=VALUES(status),created_reason=VALUES(created_reason),error_message=NULL,updated_at=NOW()`,
+    [
+      payload.user_id,
+      payload.provider,
+      payload.project_tag_id,
+      payload.user_tag_id,
+      payload.tag_name,
+      payload.status,
+      payload.created_reason,
+    ]
+  );
+  userRagTagCache.delete(`reai_vdb:${numericUserId}`);
+  const rows = await query("SELECT * FROM user_rag_tags WHERE user_id=? AND provider='reai_vdb' LIMIT 1", [numericUserId]);
+  return rows[0] || null;
 }
 
 async function getMyIdentity(event, user) {
@@ -1204,23 +1561,19 @@ async function applyProject(event, user) {
     );
     const project = projects[0];
     if (!project) throw codedError("PROJECT_NOT_FOUND", "项目不存在或暂不开放申请");
-    const review = {
-      status: "pass",
-      summary: "秘书已按人工模式收下申请。AI 和向量库接入前，先递交主理人查看。",
-    };
-    const appStatus = "pending_owner_review";
     const existing = await rdbSelect("project_applications", "*", (request) =>
       request.eq("project_id", projectId).eq("user_id", user.id).limit(1)
     );
+    const summary = "小秘书已收到申请，正在整理你的资料和可信证据。审核结果会通过站内信通知。";
     const payload = {
       project_id: projectId,
       user_id: user.id,
       message,
       can_offer: canOffer,
       related_experience: relatedExperience,
-      ai_review_status: review.status,
-      ai_review_summary: review.summary,
-      status: appStatus,
+      ai_review_status: "pending",
+      ai_review_summary: summary,
+      status: "pending_secretary_review",
     };
     if (existing[0]) {
       await rdbUpdate("project_applications", payload, (request) => request.eq("id", existing[0].id));
@@ -1233,44 +1586,19 @@ async function applyProject(event, user) {
     const applicationId = rows[0] ? rows[0].id : existing[0] && existing[0].id;
     if (applicationId) {
       await rdbInsert("in_app_notifications", {
-        user_id: project.creator_user_id,
+        user_id: user.id,
         project_id: projectId,
-        type: "project_application",
-        title: "有新的项目参与申请",
-        content: review.summary,
+        type: "project_review",
+        title: "项目申请已提交",
+        content: `你对「${project.name}」的申请已提交。小秘书会先整理资料，结果会通过站内信通知。`,
         related_id: applicationId,
       });
     }
-    return { applicationId, aiReviewStatus: review.status, aiSummary: review.summary };
+    return { applicationId, aiReviewStatus: "pending", aiSummary: summary, queued: true };
   }
   const projects = await query("SELECT * FROM projects WHERE id=? AND visibility='public' LIMIT 1", [projectId]);
   if (!projects[0]) throw codedError("PROJECT_NOT_FOUND", "项目不存在或暂不开放申请");
-  let review = {
-    status: "pass",
-    summary: "秘书已按人工模式收下申请。AI 和向量库接入前，先递交主理人查看。",
-  };
-  let reviewContext = null;
-  try {
-    reviewContext = await buildProjectApplicationReviewContext({
-      user,
-      project: projects[0],
-      application: { message, canOffer, relatedExperience },
-      identity,
-    });
-    const generated = await callAi({
-      task: "project_application_secretary_review",
-      instruction:
-        SECRETARY_PROJECT_REVIEW_PROMPT ||
-        "你是项目主理人的功能型秘书。你只能基于 hardFacts 和 evidence 判断项目申请是否值得递交主理人。风险/不匹配证据不得当作正向能力。只返回JSON: {\"status\":\"pass|revise|reject\",\"summary\":\"不超过180字，必须引用证据类别或说明证据不足\"}。",
-      payload: reviewContext,
-    });
-    if (generated && ["pass", "revise", "reject"].includes(generated.status)) {
-      review = { status: generated.status, summary: text(generated.summary, 1000) };
-    }
-  } catch (err) {
-    console.warn("secretary review fallback", err.message);
-  }
-  const appStatus = review.status === "pass" ? "pending_owner_review" : "pending_secretary_review";
+  const summary = "小秘书已收到申请，正在整理你的资料和可信证据。审核结果会通过站内信通知。";
   const result = await query(
     `INSERT INTO project_applications
      (project_id,user_id,message,can_offer,related_experience,ai_review_status,ai_review_summary,status)
@@ -1278,18 +1606,174 @@ async function applyProject(event, user) {
      ON DUPLICATE KEY UPDATE message=VALUES(message),can_offer=VALUES(can_offer),
       related_experience=VALUES(related_experience),ai_review_status=VALUES(ai_review_status),
       ai_review_summary=VALUES(ai_review_summary),status=VALUES(status),updated_at=NOW()`,
-    [projectId, user.id, message, canOffer, relatedExperience, review.status, review.summary, appStatus]
+    [projectId, user.id, message, canOffer, relatedExperience, "pending", summary, "pending_secretary_review"]
   );
   const applicationRows = await query("SELECT id FROM project_applications WHERE project_id=? AND user_id=? LIMIT 1", [projectId, user.id]);
   const applicationId = applicationRows[0] ? applicationRows[0].id : result.insertId || 0;
-  if (review.status === "pass") {
+  if (applicationId) {
     await query(
       `INSERT INTO in_app_notifications (user_id,project_id,type,title,content,related_id)
-       VALUES (?,?,'project_application','有新的项目参与申请',?,?)`,
-      [projects[0].creator_user_id, projectId, review.summary, applicationId]
+       VALUES (?,?,'project_review','项目申请已提交',?,?)`,
+      [user.id, projectId, `你对「${projects[0].name}」的申请已提交。小秘书会先整理资料，结果会通过站内信通知。`, applicationId]
     );
   }
-  return { applicationId, aiReviewStatus: review.status, aiSummary: review.summary };
+  return { applicationId, aiReviewStatus: "pending", aiSummary: summary, queued: true };
+}
+
+async function processProjectApplicationReviews(event, user) {
+  if (event.schedulerSecret) {
+    if (!process.env.SCHEDULER_SECRET || event.schedulerSecret !== process.env.SCHEDULER_SECRET) {
+      throw codedError("FORBIDDEN", "定时任务密钥不正确");
+    }
+  } else {
+    await requireAdmin(user);
+  }
+  const limit = Math.min(Math.max(Number(event.limit || 3), 1), 10);
+  if (useRdb()) return processProjectApplicationReviewsRdb(limit);
+  return processProjectApplicationReviewsMysql(limit);
+}
+
+async function processProjectApplicationReviewsRdb(limit) {
+  const applications = await rdbSelect("project_applications", "*", (request) =>
+    request
+      .eq("ai_review_status", "pending")
+      .eq("status", "pending_secretary_review")
+      .order("updated_at", { ascending: true })
+      .limit(limit)
+  );
+  let completed = 0;
+  let failed = 0;
+  const results = [];
+  for (const application of applications) {
+    try {
+      const [project, applicant] = await Promise.all([
+        findProjectById(application.project_id),
+        findUserById(application.user_id),
+      ]);
+      const identity = await getMyIdentity({}, applicant);
+      const review = await runProjectApplicationAiReview({
+        user: applicant,
+        project,
+        application: {
+          message: application.message,
+          canOffer: application.can_offer,
+          relatedExperience: application.related_experience,
+        },
+        identity,
+      });
+      const nextStatus = review.status === "pass" ? "pending_owner_review" : "pending_secretary_review";
+      await rdbUpdate(
+        "project_applications",
+        {
+          ai_review_status: review.status,
+          ai_review_summary: review.summary,
+          status: nextStatus,
+        },
+        (request) => request.eq("id", application.id)
+      );
+      await rdbInsert("in_app_notifications", {
+        user_id: applicant.id,
+        project_id: project.id,
+        type: "project_review",
+        title: review.status === "pass" ? "项目申请已通过小秘书初筛" : "项目申请已完成小秘书初筛",
+        content: review.status === "pass"
+          ? `你对「${project.name}」的申请已通过小秘书初筛，接下来等待主理人确认。${review.summary}`
+          : `你对「${project.name}」的申请已进入秘书审核。${review.summary}`,
+        related_id: application.id,
+      });
+      if (review.status === "pass" && project.creator_user_id) {
+        await rdbInsert("in_app_notifications", {
+          user_id: project.creator_user_id,
+          project_id: project.id,
+          type: "project_review",
+          title: "有新的项目参与申请",
+          content: `「${project.name}」有新的申请已通过小秘书初筛：${review.summary}`,
+          related_id: application.id,
+        });
+      }
+      completed += 1;
+      results.push({ applicationId: application.id, status: review.status, summary: review.summary });
+    } catch (err) {
+      failed += 1;
+      await rdbUpdate(
+        "project_applications",
+        {
+          ai_review_status: "revise",
+          ai_review_summary: `小秘书暂时没有完成自动初筛：${text(err.message, 300)}。已转人工秘书处理。`,
+          status: "pending_secretary_review",
+        },
+        (request) => request.eq("id", application.id)
+      ).catch(() => null);
+      results.push({ applicationId: application.id, error: err.message });
+    }
+  }
+  return { checked: applications.length, completed, failed, results };
+}
+
+async function processProjectApplicationReviewsMysql(limit) {
+  const applications = await query(
+    `SELECT * FROM project_applications
+     WHERE ai_review_status='pending' AND status='pending_secretary_review'
+     ORDER BY updated_at ASC LIMIT ?`,
+    [limit]
+  );
+  let completed = 0;
+  let failed = 0;
+  const results = [];
+  for (const application of applications) {
+    try {
+      const [project, applicant] = await Promise.all([
+        findProjectById(application.project_id),
+        findUserById(application.user_id),
+      ]);
+      const identity = await getMyIdentity({}, applicant);
+      const review = await runProjectApplicationAiReview({
+        user: applicant,
+        project,
+        application: {
+          message: application.message,
+          canOffer: application.can_offer,
+          relatedExperience: application.related_experience,
+        },
+        identity,
+      });
+      const nextStatus = review.status === "pass" ? "pending_owner_review" : "pending_secretary_review";
+      await query(
+        "UPDATE project_applications SET ai_review_status=?, ai_review_summary=?, status=?, updated_at=NOW() WHERE id=?",
+        [review.status, review.summary, nextStatus, application.id]
+      );
+      await query(
+        `INSERT INTO in_app_notifications (user_id,project_id,type,title,content,related_id)
+         VALUES (?,?,'project_review',?,?,?)`,
+        [
+          applicant.id,
+          project.id,
+          review.status === "pass" ? "项目申请已通过小秘书初筛" : "项目申请已完成小秘书初筛",
+          review.status === "pass"
+            ? `你对「${project.name}」的申请已通过小秘书初筛，接下来等待主理人确认。${review.summary}`
+            : `你对「${project.name}」的申请已进入秘书审核。${review.summary}`,
+          application.id,
+        ]
+      );
+      if (review.status === "pass" && project.creator_user_id) {
+        await query(
+          `INSERT INTO in_app_notifications (user_id,project_id,type,title,content,related_id)
+           VALUES (?,?,'project_review','有新的项目参与申请',?,?)`,
+          [project.creator_user_id, project.id, `「${project.name}」有新的申请已通过小秘书初筛：${review.summary}`, application.id]
+        );
+      }
+      completed += 1;
+      results.push({ applicationId: application.id, status: review.status, summary: review.summary });
+    } catch (err) {
+      failed += 1;
+      await query(
+        "UPDATE project_applications SET ai_review_status='revise', ai_review_summary=?, status='pending_secretary_review', updated_at=NOW() WHERE id=?",
+        [`小秘书暂时没有完成自动初筛：${text(err.message, 300)}。已转人工秘书处理。`, application.id]
+      ).catch(() => null);
+      results.push({ applicationId: application.id, error: err.message });
+    }
+  }
+  return { checked: applications.length, completed, failed, results };
 }
 
 async function toggleWatch(event, user) {
@@ -2073,6 +2557,392 @@ async function adminReviewCandidate(event, user) {
   return { saved: true };
 }
 
+function projectMemberReviewContent({ project, reviewer, reviewed, review }) {
+  return [
+    `项目：${project.name || project.id}`,
+    `被评价成员：${reviewed.display_name || reviewed.id}`,
+    `评价人：${reviewer.display_name || reviewer.id}`,
+    review.role ? `项目角色：${review.role}` : "",
+    review.contributionText ? `具体贡献：${review.contributionText}` : "",
+    review.outcomeText ? `结果表现：${review.outcomeText}` : "",
+    review.riskText ? `风险或不适合：${review.riskText}` : "",
+    review.reliabilityScore ? `靠谱度评分：${review.reliabilityScore}/10` : "",
+    review.collaborationScore ? `协作评分：${review.collaborationScore}/10` : "",
+    review.deliveryScore ? `交付评分：${review.deliveryScore}/10` : "",
+  ].filter(Boolean).join("\n");
+}
+
+async function findUserById(userId) {
+  const rows = useRdb()
+    ? await rdbSelect("users", "*", (request) => request.eq("id", userId).limit(1))
+    : await query("SELECT * FROM users WHERE id=? LIMIT 1", [userId]);
+  if (!rows[0]) throw codedError("USER_NOT_FOUND", "用户不存在");
+  return rows[0];
+}
+
+async function findProjectById(projectId) {
+  const rows = useRdb()
+    ? await rdbSelect("projects", "*", (request) => request.eq("id", projectId).limit(1))
+    : await query("SELECT * FROM projects WHERE id=? LIMIT 1", [projectId]);
+  if (!rows[0]) throw codedError("PROJECT_NOT_FOUND", "项目不存在");
+  return rows[0];
+}
+
+async function adminCreateProjectMemberReview(event, user) {
+  await requireAdmin(user);
+  const projectId = id(event.projectId);
+  const reviewedUserId = id(event.reviewedUserId || event.userId);
+  const reviewerUserId = event.reviewerUserId ? id(event.reviewerUserId) : user.id;
+  const reviewInput = event.review || {};
+  const review = {
+    role: text(reviewInput.role, 80),
+    contributionText: text(reviewInput.contributionText || reviewInput.contribution, 30000),
+    outcomeText: text(reviewInput.outcomeText || reviewInput.outcome, 10000),
+    riskText: text(reviewInput.riskText || reviewInput.risk, 10000),
+    reliabilityScore: reviewInput.reliabilityScore ? Math.min(Math.max(Number(reviewInput.reliabilityScore), 1), 10) : null,
+    collaborationScore: reviewInput.collaborationScore ? Math.min(Math.max(Number(reviewInput.collaborationScore), 1), 10) : null,
+    deliveryScore: reviewInput.deliveryScore ? Math.min(Math.max(Number(reviewInput.deliveryScore), 1), 10) : null,
+  };
+  if (!review.contributionText) throw codedError("VALIDATION_ERROR", "主理人评价必须填写具体贡献");
+  const [project, reviewer, reviewed] = await Promise.all([
+    findProjectById(projectId),
+    findUserById(reviewerUserId),
+    findUserById(reviewedUserId),
+  ]);
+  let reviewId = null;
+  if (useRdb()) {
+    const existing = await rdbSelect("project_member_reviews", "*", (request) =>
+      request.eq("project_id", projectId).eq("reviewer_user_id", reviewerUserId).eq("reviewed_user_id", reviewedUserId).limit(1)
+    );
+    const payload = {
+      project_id: projectId,
+      reviewer_user_id: reviewerUserId,
+      reviewed_user_id: reviewedUserId,
+      role: review.role,
+      contribution_text: review.contributionText,
+      outcome_text: review.outcomeText,
+      risk_text: review.riskText,
+      reliability_score: review.reliabilityScore,
+      collaboration_score: review.collaborationScore,
+      delivery_score: review.deliveryScore,
+      visibility: "sealed",
+      status: "confirmed",
+    };
+    if (existing[0]) {
+      reviewId = existing[0].id;
+      await rdbUpdate("project_member_reviews", payload, (request) => request.eq("id", reviewId));
+    } else {
+      await rdbInsert("project_member_reviews", payload);
+      const created = await rdbSelect("project_member_reviews", "id", (request) =>
+        request.eq("project_id", projectId).eq("reviewer_user_id", reviewerUserId).eq("reviewed_user_id", reviewedUserId).limit(1)
+      );
+      reviewId = created[0] && created[0].id;
+    }
+  } else {
+    const result = await query(
+      `INSERT INTO project_member_reviews
+       (project_id,reviewer_user_id,reviewed_user_id,role,contribution_text,outcome_text,risk_text,
+        reliability_score,collaboration_score,delivery_score,visibility,status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,'sealed','confirmed')
+       ON DUPLICATE KEY UPDATE role=VALUES(role),contribution_text=VALUES(contribution_text),
+        outcome_text=VALUES(outcome_text),risk_text=VALUES(risk_text),reliability_score=VALUES(reliability_score),
+        collaboration_score=VALUES(collaboration_score),delivery_score=VALUES(delivery_score),status='confirmed',updated_at=NOW()`,
+      [
+        projectId,
+        reviewerUserId,
+        reviewedUserId,
+        review.role,
+        review.contributionText,
+        review.outcomeText,
+        review.riskText,
+        review.reliabilityScore,
+        review.collaborationScore,
+        review.deliveryScore,
+      ]
+    );
+    const rows = await query(
+      "SELECT id FROM project_member_reviews WHERE project_id=? AND reviewer_user_id=? AND reviewed_user_id=? LIMIT 1",
+      [projectId, reviewerUserId, reviewedUserId]
+    );
+    reviewId = rows[0] ? rows[0].id : result.insertId;
+  }
+  if (!reviewId) throw codedError("REVIEW_CREATE_FAILED", "项目成员评价写入失败");
+  const content = projectMemberReviewContent({ project, reviewer, reviewed, review });
+  const ragResult = await upsertRagSourceForCurrentDriver({
+    sourceType: "project_member_review",
+    sourceId: reviewId,
+    ownerUserId: reviewedUserId,
+    projectId,
+    title: `项目主理人评价：${project.name || projectId}`,
+    summary: truncate(content, 500),
+    tags: parseTags(event.tagsText || event.tags || ""),
+    visibility: "sealed",
+    sourceTrust: "owner_review",
+    content,
+    metadata: {
+      source: "adminCreateProjectMemberReview",
+      source_trust: "owner_review",
+      reviewer_user_id: reviewerUserId,
+      reviewed_user_id: reviewedUserId,
+    },
+  });
+  await adminLog(user, "create_project_member_review", "project_member_review", reviewId, { projectId, reviewedUserId });
+  return { reviewId, rag: ragResult };
+}
+
+function adminEvidenceSourceType(evidenceType) {
+  if (evidenceType === "admin_interview") return "admin_interview";
+  if (evidenceType === "admin_evidence" || evidenceType === "risk_note") return "admin_evidence";
+  return "admin_note";
+}
+
+function adminEvidenceSourceTrust(evidenceType) {
+  if (evidenceType === "admin_interview") return "admin_interview";
+  if (evidenceType === "admin_evidence") return "verified_record";
+  return "admin_note";
+}
+
+async function adminCreateUserEvidence(event, user) {
+  await requireAdmin(user);
+  const targetUserId = id(event.userId || event.targetUserId);
+  const projectId = event.projectId ? id(event.projectId) : null;
+  const eventId = event.eventId ? id(event.eventId) : null;
+  const communityId = event.communityId ? id(event.communityId) : null;
+  const evidenceType = ["admin_note", "admin_interview", "admin_evidence", "risk_note"].includes(event.evidenceType)
+    ? event.evidenceType
+    : "admin_note";
+  const fileText = await extractEvidenceFileText(event.file);
+  const content = [event.content || (event.evidence && event.evidence.content), fileText]
+    .map((item) => text(item, 120000))
+    .filter(Boolean)
+    .join("\n\n");
+  if (!content) throw codedError("VALIDATION_ERROR", "管理员证据内容不能为空");
+  const targetUser = await findUserById(targetUserId);
+  const confidence = Math.min(Math.max(Number(event.confidence || 0.9), 0), 1);
+  let evidenceId = null;
+  const payload = {
+    user_id: targetUserId,
+    project_id: projectId,
+    event_id: eventId,
+    community_id: communityId,
+    source_type: "admin_console",
+    source_id: null,
+    evidence_type: evidenceType,
+    content,
+    evidence_level: "admin_verified",
+    confidence,
+    visibility: "sealed",
+    status: "confirmed",
+    created_by: user.id,
+  };
+  if (useRdb()) {
+    await rdbInsert("evidence_records", payload);
+    const rows = await rdbSelect("evidence_records", "id", (request) =>
+      request.eq("user_id", targetUserId).eq("created_by", user.id).eq("evidence_type", evidenceType).order("created_at", { ascending: false }).limit(1)
+    );
+    evidenceId = rows[0] && rows[0].id;
+  } else {
+    const result = await query(
+      `INSERT INTO evidence_records
+       (user_id,project_id,event_id,community_id,source_type,source_id,evidence_type,content,evidence_level,confidence,visibility,status,created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,'sealed','confirmed',?)`,
+      [
+        targetUserId,
+        projectId,
+        eventId,
+        communityId,
+        payload.source_type,
+        payload.source_id,
+        evidenceType,
+        content,
+        payload.evidence_level,
+        confidence,
+        user.id,
+      ]
+    );
+    evidenceId = result.insertId;
+  }
+  if (!evidenceId) throw codedError("EVIDENCE_CREATE_FAILED", "管理员证据写入失败");
+  const sourceType = adminEvidenceSourceType(evidenceType);
+  const sourceTrust = adminEvidenceSourceTrust(evidenceType);
+  const ragResult = await upsertRagSourceForCurrentDriver({
+    sourceType,
+    sourceId: evidenceId,
+    ownerUserId: targetUserId,
+    projectId,
+    eventId,
+    communityId,
+    title: event.title || `管理员证据：${targetUser.display_name || targetUserId}`,
+    summary: truncate(content, 500),
+    tags: parseTags(event.tagsText || event.tags || ""),
+    visibility: "sealed",
+    sourceTrust,
+    content,
+    metadata: {
+      source: "adminCreateUserEvidence",
+      source_trust: sourceTrust,
+      evidence_type: evidenceType,
+      created_by: user.id,
+      filename: event.file && event.file.filename ? text(event.file.filename, 180) : "",
+    },
+  });
+  await adminLog(user, "create_user_evidence", "evidence", evidenceId, { targetUserId, communityId, evidenceType });
+  return { evidenceId, rag: ragResult };
+}
+
+async function adminCreateCommunityMemberEvidence(event, user) {
+  await requireAdmin(user);
+  const communityId = id(event.communityId);
+  const targetUserId = id(event.userId || event.targetUserId);
+  const memberships = useRdb()
+    ? await rdbSelect("community_memberships", "id,status", (request) =>
+        request.eq("community_id", communityId).eq("user_id", targetUserId).limit(1)
+      )
+    : await query("SELECT id,status FROM community_memberships WHERE community_id=? AND user_id=? LIMIT 1", [communityId, targetUserId]);
+  if (!memberships[0] || memberships[0].status !== "active") {
+    throw codedError("VALIDATION_ERROR", "只能给该社区已认证成员上传证据");
+  }
+  return adminCreateUserEvidence({
+    ...event,
+    userId: targetUserId,
+    communityId,
+    evidenceType: event.evidenceType || "admin_evidence",
+    tags: unique(["community", ...(Array.isArray(event.tags) ? event.tags : parseTags(event.tagsText || event.tags))]),
+  }, user);
+}
+
+async function adminTestProjectApplicationReview(event, user) {
+  await requireAdmin(user);
+  const { project, applicant, application, identity } = await buildAdminApplicationTestInput(event);
+  const retrievalOptions = {
+    useAiPlan: event.useAiPlan !== false,
+    maxQueries: event.maxQueries,
+    topK: event.topK,
+  };
+  const reviewContext = await buildProjectApplicationReviewContext({
+    user: applicant,
+    project,
+    application,
+    identity,
+    retrievalOptions,
+  });
+  const review = await runProjectApplicationAiReview({ user: applicant, project, application, identity, reviewContext });
+  return {
+    project: {
+      id: project.id,
+      name: project.name,
+      tags: parseJson(project.tags_json, []),
+    },
+    applicant: {
+      id: applicant.id,
+      displayName: applicant.display_name,
+    },
+    retrievalPlan: reviewContext.retrievalPlan,
+    evidence: reviewContext.evidence,
+    hardFacts: reviewContext.hardFacts,
+    review,
+  };
+}
+
+async function adminDebugProjectApplicationInput(event, user) {
+  await requireAdmin(user);
+  const projectId = id(event.projectId);
+  const applicantUserId = id(event.applicantUserId || event.userId);
+  const [project, applicant] = await Promise.all([findProjectById(projectId), findUserById(applicantUserId)]);
+  const application = {
+    message: text(event.application && event.application.message, 3000) || "我想参与这个项目，希望进一步了解任务并承担适合我的部分。",
+    canOffer: text(event.application && event.application.canOffer, 2000) || "我可以提供执行、沟通和项目推进支持。",
+    relatedExperience: text(event.application && (event.application.relatedExperience || event.application.reason), 2000),
+  };
+  const identity = event.includeIdentity ? await getMyIdentity({}, applicant) : null;
+  return {
+    project: {
+      id: project.id,
+      name: project.name,
+      tags: parseJson(project.tags_json, []),
+      status: project.status,
+      visibility: project.visibility,
+    },
+    applicant: {
+      id: applicant.id,
+      openid: applicant.openid,
+      displayName: applicant.display_name,
+      status: applicant.status,
+      experiencePoints: applicant.experience_points,
+    },
+    application,
+    identity: identity ? identity.identity : null,
+  };
+}
+
+async function buildAdminApplicationTestInput(event) {
+  const projectId = id(event.projectId);
+  const applicantUserId = id(event.applicantUserId || event.userId);
+  const [project, applicant] = await Promise.all([findProjectById(projectId), findUserById(applicantUserId)]);
+  const application = {
+    message: text(event.application && event.application.message, 3000) || "我想参与这个项目，希望进一步了解任务并承担适合我的部分。",
+    canOffer: text(event.application && event.application.canOffer, 2000) || "我可以提供执行、沟通和项目推进支持。",
+    relatedExperience: text(event.application && (event.application.relatedExperience || event.application.reason), 2000),
+  };
+  const identity = await getMyIdentity({}, applicant);
+  return { project, applicant, application, identity };
+}
+
+async function adminTestProjectApplicationEvidence(event, user) {
+  await requireAdmin(user);
+  const { project, applicant, application, identity } = await buildAdminApplicationTestInput(event);
+  const retrievalOptions = {
+    useAiPlan: event.useAiPlan !== false,
+    maxQueries: event.maxQueries,
+    topK: event.topK,
+  };
+  const reviewContext = await buildProjectApplicationReviewContext({
+    user: applicant,
+    project,
+    application,
+    identity,
+    retrievalOptions,
+  });
+  return {
+    project: {
+      id: project.id,
+      name: project.name,
+      tags: parseJson(project.tags_json, []),
+    },
+    applicant: {
+      id: applicant.id,
+      displayName: applicant.display_name,
+    },
+    retrievalPlan: reviewContext.retrievalPlan,
+    evidence: reviewContext.evidence,
+    hardFacts: reviewContext.hardFacts,
+  };
+}
+
+async function adminTestSingleEvidenceSearch(event, user) {
+  await requireAdmin(user);
+  const { project, applicant, application, identity } = await buildAdminApplicationTestInput(event);
+  const fallbackPlan = buildFallbackProjectApplicationRetrievalPlan({ applicant, project, application });
+  const planIndex = Math.min(Math.max(Number(event.planIndex || 0), 0), fallbackPlan.length - 1);
+  const basePlan = fallbackPlan[planIndex] || fallbackPlan[0];
+  const plan = {
+    ...basePlan,
+    name: text(event.name, 60) || basePlan.name,
+    query: text(event.query, 1000) || basePlan.query,
+    topK: Math.min(Math.max(Number(event.topK || basePlan.topK || 2), 1), 3),
+  };
+  const startedAt = Date.now();
+  const matches = await searchEvidence(plan, applicant.id);
+  return {
+    elapsedMs: Date.now() - startedAt,
+    project: { id: project.id, name: project.name },
+    applicant: { id: applicant.id, displayName: applicant.display_name },
+    identity: identity.identity,
+    plan: { name: plan.name, bucket: plan.bucket, query: plan.query, topK: plan.topK, filters: plan.filters },
+    matches,
+  };
+}
+
 async function adminUpdateProject(event, user) {
   await requireAdmin(user);
   const projectId = id(event.projectId);
@@ -2321,40 +3191,46 @@ function formatWechatTime(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function httpJson(url, options, body) {
+function httpJson(url, options, body, timeoutMs = AI_REQUEST_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
-    const request = https.request(url, options, (response) => {
+    const timeoutCode = options && options.timeoutCode ? options.timeoutCode : "HTTP_TIMEOUT";
+    const timeoutMessage = options && options.timeoutMessage ? options.timeoutMessage : "外部接口请求超时";
+    const requestOptions = { ...options };
+    delete requestOptions.timeoutCode;
+    delete requestOptions.timeoutMessage;
+    const rawBody = JSON.stringify(body);
+    const request = https.request(url, requestOptions, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
       response.on("end", () => {
         const raw = Buffer.concat(chunks).toString("utf8");
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          reject(codedError("AI_REQUEST_FAILED", `模型接口返回 ${response.statusCode}: ${raw.slice(0, 500)}`));
+          reject(codedError("HTTP_REQUEST_FAILED", `外部接口返回 ${response.statusCode}: ${raw.slice(0, 500)}`));
           return;
         }
         try {
           resolve(JSON.parse(raw));
         } catch (err) {
-          reject(codedError("AI_RESPONSE_INVALID", "模型接口没有返回合法 JSON"));
+          reject(codedError("HTTP_RESPONSE_INVALID", "外部接口没有返回合法 JSON"));
         }
       });
     });
     request.on("error", reject);
-    request.setTimeout(55000, () => request.destroy(codedError("AI_TIMEOUT", "模型接口超时")));
-    request.write(JSON.stringify(body));
+    request.setTimeout(timeoutMs, () => request.destroy(codedError(timeoutCode, timeoutMessage)));
+    request.write(rawBody);
     request.end();
   });
 }
 
 async function callAi({ task, instruction, schema, payload }) {
-  const baseUrl = process.env.AI_BASE_URL;
-  const apiKey = process.env.AI_API_KEY;
-  const model = process.env.AI_MODEL;
+  const baseUrl = AI_BASE_URL;
+  const apiKey = AI_API_KEY;
+  const model = AI_MODEL;
   if (!baseUrl || !apiKey || !model) throw codedError("AI_NOT_CONFIGURED", "AI 模型尚未配置");
   const endpoint = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
   const body = {
     model,
-    temperature: 0.1,
+    temperature: AI_TEMPERATURE,
     response_format: { type: "json_object" },
     messages: [
       {
@@ -2372,9 +3248,12 @@ async function callAi({ task, instruction, schema, payload }) {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(JSON.stringify(body))
-      }
+      },
+      timeoutCode: "AI_TIMEOUT",
+      timeoutMessage: "模型接口超时",
     },
-    body
+    body,
+    AI_REQUEST_TIMEOUT_MS
   );
   const content = response.choices && response.choices[0] && response.choices[0].message && response.choices[0].message.content;
   if (!content) throw codedError("AI_RESPONSE_EMPTY", "模型没有返回内容");
@@ -2385,55 +3264,179 @@ async function callAi({ task, instruction, schema, payload }) {
   }
 }
 
-function buildProjectApplicationRetrievalPlan({ applicant, project, application }) {
+function aiConfigured() {
+  return Boolean(AI_BASE_URL && AI_API_KEY && AI_MODEL);
+}
+
+function buildProjectApplicationBaseFilters(applicantId) {
+  return {
+    owner_user_id: applicantId,
+    status: ["indexed", "pending"],
+    source_type: [
+      "profile",
+      "card",
+      "event_record",
+      "project_record",
+      "project_member_review",
+      "feedback",
+      "admin_note",
+      "admin_evidence",
+      "admin_interview",
+      "offline_transcript",
+    ],
+    visibility: ["match_only", "project_visible", "admin_only", "sealed"],
+    source_trust: ["self_reported", "system_observed", "owner_review", "admin_note", "admin_interview", "verified_record", "transcript_verified"],
+  };
+}
+
+function buildFallbackProjectApplicationRetrievalPlan({ applicant, project, application }) {
   const projectTags = parseJson(project.tags_json, project.tags || []);
   const requiredCapabilities = parseJson(project.required_capabilities_json, []);
   const idealParticipant = text(project.ideal_participant, 1000);
   const notFitParticipant = text(project.not_fit_participant, 1000);
   const goal = text(project.goal || project.description, 1200);
   const name = applicant.display_name || `用户${applicant.id}`;
-  const baseFilters = {
-    owner_user_id: applicant.id,
-    status: ["indexed", "pending"],
-    source_type: ["profile", "card", "event_record", "project_record", "feedback", "admin_note", "offline_transcript"],
-  };
+  const baseFilters = buildProjectApplicationBaseFilters(applicant.id);
   return [
     {
       name: "tag_match",
       bucket: "positive",
-      topK: VECTOR_TOP_K,
+      topK: RAG_RETRIEVAL_TOP_K,
       query: `查找申请人 ${name} 与项目标签 ${projectTags.join("、")} 相关的过往经历、项目记录、活动记录和被确认的能力证据。项目目标：${goal}。希望参与者：${idealParticipant || "未填写"}。申请人自述：${application.message} ${application.canOffer} ${application.relatedExperience}。只返回能证明匹配关系的资料。`,
       filters: { ...baseFilters, evidence_polarity: ["positive", "neutral"] },
     },
     {
       name: "capability_match",
       bucket: "positive",
-      topK: VECTOR_TOP_K,
+      topK: RAG_RETRIEVAL_TOP_K,
       query: `查找申请人 ${name} 是否具备这些能力：${requiredCapabilities.join("、") || projectTags.join("、")}。优先返回真实项目、活动、交付结果、他人评价中的证据。不要返回纯自我宣传，除非没有其他资料。`,
       filters: { ...baseFilters, evidence_polarity: ["positive", "neutral"] },
     },
     {
       name: "delivery_evidence",
       bucket: "delivery",
-      topK: VECTOR_TOP_K,
+      topK: RAG_RETRIEVAL_TOP_K,
       query: `查找申请人 ${name} 的真实交付记录：主理过什么、完成过什么、推进过什么、解决过什么具体问题。优先返回有时间、项目、结果、他人确认的资料。`,
       filters: { ...baseFilters, evidence_polarity: ["positive", "neutral"] },
     },
     {
       name: "collaboration_evidence",
       bucket: "collaboration",
-      topK: VECTOR_TOP_K,
+      topK: RAG_RETRIEVAL_TOP_K,
       query: `查找申请人 ${name} 在线下活动、社区评审、项目协作、共同交付中的合作记录。重点关注靠谱、响应、沟通、复盘、持续投入、被邀请继续合作等证据。`,
       filters: { ...baseFilters, evidence_polarity: ["positive", "neutral"] },
     },
     {
       name: "risk_mismatch",
       bucket: "risk",
-      topK: VECTOR_TOP_K,
+      topK: RAG_RETRIEVAL_TOP_K,
       query: `查找申请人 ${name} 与项目 ${project.name} 不匹配的证据。项目标签：${projectTags.join("、")}。不适合的人：${notFitParticipant || "未填写"}。包括明确不想做、不擅长相关能力、时间不匹配、退出记录、未完成记录、负面反馈。如果资料中出现“不擅长”“不想做”“不接”“避免”“讨厌”“没经验”，必须作为负向或偏好证据返回。`,
       filters: { ...baseFilters, evidence_polarity: ["negative", "preference"] },
     },
   ];
+}
+
+function applyRetrievalPlanOptions(plan, options = {}) {
+  const defaultCount = plan.length;
+  const maxQueries = Math.min(Math.max(Number(options.maxQueries || defaultCount), 1), defaultCount);
+  const topK = Math.min(Math.max(Number(options.topK || RAG_RETRIEVAL_TOP_K), 1), 3);
+  return plan.slice(0, maxQueries).map((item) => ({ ...item, topK }));
+}
+
+async function buildProjectApplicationRetrievalPlan({ applicant, project, application, identity, options = {} }) {
+  const fallbackPlan = buildFallbackProjectApplicationRetrievalPlan({ applicant, project, application });
+  if (options.useAiPlan === false || !aiConfigured()) return applyRetrievalPlanOptions(fallbackPlan, options);
+
+  const projectTags = parseJson(project.tags_json, project.tags || []);
+  const requiredCapabilities = parseJson(project.required_capabilities_json, []);
+  const baseFilters = buildProjectApplicationBaseFilters(applicant.id);
+  try {
+    const generated = await callAi({
+      task: "project_application_retrieval_queries",
+      instruction:
+        SECRETARY_RETRIEVAL_PROMPT ||
+        "你是项目申请审核的检索策略助手。你只负责生成用于 RAG 检索的中文问题，不做最终判断。根据项目资料、申请人自述和平台证据规则，生成5到6个检索问题。问题必须覆盖：项目能力匹配、真实交付、协作稳定性、密封证据链、风险/不匹配。不要生成宽泛问题。不要要求检索用户无权访问的数据。只返回JSON: {\"queries\":[{\"name\":\"英文短标识\",\"bucket\":\"positive|delivery|collaboration|risk\",\"query\":\"具体检索问题\",\"evidence_polarity\":[\"positive|neutral|negative|preference\"]}]}。",
+      schema: {
+        type: "object",
+        required: ["queries"],
+        properties: {
+          queries: {
+            type: "array",
+            minItems: 5,
+            maxItems: 6,
+            items: {
+              type: "object",
+              required: ["name", "bucket", "query", "evidence_polarity"],
+              properties: {
+                name: { type: "string" },
+                bucket: { enum: ["positive", "delivery", "collaboration", "risk"] },
+                query: { type: "string" },
+                evidence_polarity: {
+                  type: "array",
+                  items: { enum: ["positive", "neutral", "negative", "preference"] },
+                },
+              },
+            },
+          },
+        },
+      },
+      payload: {
+        applicant: {
+          id: applicant.id,
+          displayName: applicant.display_name,
+          experiencePoints: applicant.experience_points,
+          communities: identity && identity.identity && identity.identity.communities,
+        },
+        project: {
+          id: project.id,
+          name: project.name,
+          description: truncate(project.description, 1000),
+          tags: projectTags,
+          goal: project.goal,
+          idealParticipant: project.ideal_participant,
+          notFitParticipant: project.not_fit_participant,
+          requiredCapabilities,
+        },
+        application,
+        rules: {
+          queryCount: RAG_RETRIEVAL_QUERY_COUNT,
+          evidenceSourceBoundary: "本人自述只能作为弱证据；项目主理人评价和管理员密封证据是强证据；负向证据不能被解释成正向能力。",
+          allowedSourceTypes: baseFilters.source_type,
+          allowedVisibility: baseFilters.visibility,
+          allowedSourceTrust: baseFilters.source_trust,
+        },
+      },
+    });
+    const queries = Array.isArray(generated && generated.queries) ? generated.queries : [];
+    const normalized = queries
+      .map((item, index) => {
+        const bucket = ["positive", "delivery", "collaboration", "risk"].includes(item.bucket) ? item.bucket : "positive";
+        const query = text(item.query, 800);
+        if (!query) return null;
+        const polarity = Array.isArray(item.evidence_polarity) ? item.evidence_polarity.filter((value) =>
+          ["positive", "neutral", "negative", "preference"].includes(value)
+        ) : [];
+        const evidencePolarity = bucket === "risk"
+          ? (polarity.filter((value) => value === "negative" || value === "preference").length
+            ? polarity.filter((value) => value === "negative" || value === "preference")
+            : ["negative", "preference"])
+          : (polarity.length ? polarity.filter((value) => value === "positive" || value === "neutral") : ["positive", "neutral"]);
+        return {
+          name: text(item.name, 60) || `ai_query_${index + 1}`,
+          bucket,
+          topK: RAG_RETRIEVAL_TOP_K,
+          query,
+          filters: { ...baseFilters, evidence_polarity: evidencePolarity.length ? evidencePolarity : ["positive", "neutral"] },
+          generatedBy: "ai",
+        };
+      })
+      .filter(Boolean)
+      .slice(0, RAG_RETRIEVAL_QUERY_COUNT);
+    if (normalized.length >= 5) return applyRetrievalPlanOptions(normalized, options);
+  } catch (err) {
+    console.warn("AI retrieval plan fallback", err.message);
+  }
+  return applyRetrievalPlanOptions(fallbackPlan, options);
 }
 
 function normalizeVectorMatch(match, plan) {
@@ -2446,14 +3449,29 @@ function normalizeVectorMatch(match, plan) {
     id: metadata.chunk_id || metadata.chunkId || metadata.vector_doc_id || match.id || `${plan.name}_${sha256(content).slice(0, 12)}`,
     bucket: plan.bucket,
     plan: plan.name,
-    content: truncate(content, 180),
+    content: truncate(content, 500),
     sourceType,
     sourceId: metadata.source_id || metadata.sourceId || null,
     sourceTitle: metadata.title || "",
     vectorDocId: metadata.vector_doc_id || match.id || "",
+    ownerUserId: metadata.owner_user_id || metadata.ownerUserId || null,
+    visibility: metadata.visibility || "",
+    sourceTrust: metadata.source_trust || metadata.sourceTrust || "",
     confidence: Number(match.score || match.similarity || metadata.confidence || confidenceForSource(sourceType, polarity)),
     polarity,
   };
+}
+
+function vectorMatchAllowed(item, plan, applicantUserId) {
+  if (!item) return false;
+  const filters = (plan && plan.filters) || {};
+  if (filters.owner_user_id && Number(item.ownerUserId || 0) !== Number(filters.owner_user_id)) return false;
+  if (Array.isArray(filters.source_type) && item.sourceType && !filters.source_type.includes(item.sourceType)) return false;
+  if (Array.isArray(filters.visibility) && item.visibility && !filters.visibility.includes(item.visibility)) return false;
+  if (Array.isArray(filters.source_trust) && item.sourceTrust && !filters.source_trust.includes(item.sourceTrust)) return false;
+  if (Array.isArray(filters.evidence_polarity) && item.polarity && !filters.evidence_polarity.includes(item.polarity)) return false;
+  if (applicantUserId && item.ownerUserId && Number(item.ownerUserId) !== Number(applicantUserId)) return false;
+  return true;
 }
 
 function bucketEvidence(items) {
@@ -2477,15 +3495,16 @@ function bucketEvidence(items) {
 }
 
 async function fallbackEvidenceSearch(plan, applicantUserId) {
+  if (useRdb()) return fallbackEvidenceSearchRdb(plan, applicantUserId);
   const polarityFilter = plan.filters && plan.filters.evidence_polarity;
   const polaritySql = Array.isArray(polarityFilter) ? `AND rc.evidence_polarity IN (${polarityFilter.map(() => "?").join(",")})` : "";
   const rows = await query(
     `SELECT rc.id AS chunk_id, rc.content, rc.content_summary, rc.vector_doc_id, rc.evidence_polarity, rc.confidence,
-      rs.source_type, rs.source_id, rs.title
+      rs.source_type, rs.source_id, rs.title, rs.visibility, rs.source_trust
      FROM rag_chunks rc
      JOIN rag_sources rs ON rs.id = rc.source_id
      WHERE rs.owner_user_id = ? AND rs.status IN ('pending','indexed') AND rc.status IN ('pending','indexed')
-       AND rs.visibility IN ('match_only','project_visible','public')
+       AND rs.visibility IN ('match_only','project_visible','admin_only','sealed')
        ${polaritySql}
      ORDER BY rc.confidence DESC, rc.updated_at DESC
      LIMIT ?`,
@@ -2495,21 +3514,91 @@ async function fallbackEvidenceSearch(plan, applicantUserId) {
     id: row.chunk_id,
     bucket: plan.bucket,
     plan: plan.name,
-    content: truncate(row.content_summary || row.content, 180),
+    content: truncate(row.content_summary || row.content, 500),
     sourceType: row.source_type,
     sourceId: row.source_id,
     sourceTitle: row.title,
     vectorDocId: row.vector_doc_id,
+    ownerUserId: applicantUserId,
+    visibility: row.visibility,
+    sourceTrust: row.source_trust,
     confidence: Number(row.confidence || 0.7),
     polarity: row.evidence_polarity,
   }));
 }
 
+async function fallbackEvidenceSearchRdb(plan, applicantUserId) {
+  const polarityFilter = plan.filters && plan.filters.evidence_polarity;
+  let chunkRequest = getRdb()
+    .from("rag_chunks")
+    .select("id,source_id,content,content_summary,vector_doc_id,evidence_polarity,confidence,status,updated_at")
+    .in("status", ["pending", "indexed"])
+    .order("confidence", { ascending: false })
+    .order("updated_at", { ascending: false })
+    .limit(Math.max(plan.topK || RAG_RETRIEVAL_TOP_K, 3) * 8);
+  if (Array.isArray(polarityFilter) && polarityFilter.length) {
+    chunkRequest = chunkRequest.in("evidence_polarity", polarityFilter);
+  }
+  const chunkRows = (assertRdb(await chunkRequest, "RDB 兜底查询 RAG 切片").data || []);
+  if (!chunkRows.length) return [];
+  const sourceIds = unique(chunkRows.map((row) => row.source_id).filter(Boolean)).slice(0, 50);
+  if (!sourceIds.length) return [];
+  const sourceRows = await rdbSelect("rag_sources", "id,owner_user_id,source_type,source_id,title,visibility,source_trust,status", (request) =>
+    request
+      .in("id", sourceIds)
+      .eq("owner_user_id", applicantUserId)
+      .in("status", ["pending", "indexed"])
+      .in("visibility", ["match_only", "project_visible", "admin_only", "sealed"])
+      .limit(50)
+  );
+  const sourceById = new Map(sourceRows.map((row) => [Number(row.id), row]));
+  return chunkRows
+    .map((row) => {
+      const source = sourceById.get(Number(row.source_id));
+      if (!source) return null;
+      return {
+        id: row.id,
+        bucket: plan.bucket,
+        plan: plan.name,
+        content: truncate(row.content_summary || row.content, 500),
+        sourceType: source.source_type,
+        sourceId: source.source_id,
+        sourceTitle: source.title,
+        vectorDocId: row.vector_doc_id,
+        ownerUserId: source.owner_user_id,
+        visibility: source.visibility,
+        sourceTrust: source.source_trust,
+        confidence: Number(row.confidence || 0.7),
+        polarity: row.evidence_polarity,
+      };
+    })
+    .filter((item) => vectorMatchAllowed(item, plan, applicantUserId))
+    .slice(0, Math.max(plan.topK || RAG_RETRIEVAL_TOP_K, 3));
+}
+
 async function searchEvidence(plan, applicantUserId) {
   try {
-    const matches = await vectorSearch({ query: plan.query, topK: plan.topK || VECTOR_TOP_K, filters: plan.filters, plan: plan.name });
-    const normalized = (matches || []).map((match) => normalizeVectorMatch(match, plan)).filter(Boolean);
+    const userRagTag = await getActiveUserRagTag(applicantUserId);
+    const userTags = userRagTag && userRagTag.user_tag_id ? [userRagTag.user_tag_id] : [];
+    const firstPayload = {
+      query: plan.query,
+      topK: plan.topK || VECTOR_TOP_K,
+      filters: plan.filters,
+      plan: plan.name,
+      reaiTags: userTags.length ? userTags : undefined,
+    };
+    const matches = await vectorSearch(firstPayload);
+    const normalized = (matches || [])
+      .map((match) => normalizeVectorMatch(match, plan))
+      .filter((item) => vectorMatchAllowed(item, plan, applicantUserId));
     if (normalized.length) return normalized;
+    if (userTags.length) {
+      const defaultMatches = await vectorSearch({ query: plan.query, topK: plan.topK || VECTOR_TOP_K, filters: plan.filters, plan: plan.name });
+      const defaultNormalized = (defaultMatches || [])
+        .map((match) => normalizeVectorMatch(match, plan))
+        .filter((item) => vectorMatchAllowed(item, plan, applicantUserId));
+      if (defaultNormalized.length) return defaultNormalized;
+    }
   } catch (err) {
     console.warn("vector evidence search fallback", plan.name, err.message);
   }
@@ -2517,6 +3606,7 @@ async function searchEvidence(plan, applicantUserId) {
 }
 
 async function getApplicationHardFacts(user, project, application, identity) {
+  if (useRdb()) return getApplicationHardFactsRdb(user, project, application, identity);
   const [myProjects, eventRows, memoryRows, evidenceRows] = await Promise.all([
     query(
       `SELECT p.id,p.name,p.stage,p.status,pm.role,pm.status AS member_status
@@ -2569,12 +3659,106 @@ async function getApplicationHardFacts(user, project, application, identity) {
   };
 }
 
-async function buildProjectApplicationReviewContext({ user, project, application, identity }) {
-  const retrievalPlan = buildProjectApplicationRetrievalPlan({ applicant: user, project, application });
-  const results = [];
-  for (const plan of retrievalPlan) {
-    results.push(...(await searchEvidence(plan, user.id)));
+async function safeRdbRead(table, columns, build) {
+  try {
+    return await rdbSelect(table, columns, build);
+  } catch (err) {
+    console.warn("safeRdbRead fallback", table, err.message);
+    return [];
   }
+}
+
+async function getApplicationHardFactsRdb(user, project, application, identity) {
+  const [memberRows, registrationRows, memoryRows, evidenceRows] = await Promise.all([
+    safeRdbRead("project_members", "project_id,role,status,joined_at,created_at", (request) =>
+      request.eq("user_id", user.id).order("joined_at", { ascending: false }).limit(12)
+    ),
+    safeRdbRead("event_registrations", "event_id,status,created_at", (request) =>
+      request.eq("user_id", user.id).order("created_at", { ascending: false }).limit(12)
+    ),
+    safeRdbRead("user_agent_memories", "content,memory_type,evidence_level,confidence,visibility,status,updated_at", (request) =>
+      request.eq("user_id", user.id).eq("status", "confirmed").order("confidence", { ascending: false }).limit(8)
+    ),
+    safeRdbRead("evidence_records", "content,evidence_type,evidence_level,confidence,visibility,status,created_at", (request) =>
+      request.eq("user_id", user.id).eq("status", "confirmed").order("confidence", { ascending: false }).limit(8)
+    ),
+  ]);
+  const projectIds = unique(memberRows.map((item) => item.project_id).filter(Boolean)).slice(0, 12);
+  const eventIds = unique(registrationRows.map((item) => item.event_id).filter(Boolean)).slice(0, 12);
+  const [projectRows, eventRows] = await Promise.all([
+    projectIds.length
+      ? safeRdbRead("projects", "id,name,stage,status", (request) => request.in("id", projectIds).limit(12))
+      : [],
+    eventIds.length
+      ? safeRdbRead("official_events", "id,title,event_type,start_time", (request) => request.in("id", eventIds).limit(12))
+      : [],
+  ]);
+  const projectById = new Map(projectRows.map((item) => [Number(item.id), item]));
+  const eventById = new Map(eventRows.map((item) => [Number(item.id), item]));
+  const myProjects = memberRows.map((member) => {
+    const projectRow = projectById.get(Number(member.project_id)) || {};
+    return {
+      id: member.project_id,
+      name: projectRow.name || "",
+      stage: projectRow.stage || "",
+      status: projectRow.status || "",
+      role: member.role,
+      member_status: member.status,
+    };
+  });
+  const myEvents = registrationRows.map((registration) => {
+    const eventRow = eventById.get(Number(registration.event_id)) || {};
+    return {
+      id: registration.event_id,
+      title: eventRow.title || "",
+      event_type: eventRow.event_type || "",
+      start_time: eventRow.start_time || null,
+      status: registration.status,
+    };
+  });
+  return {
+    applicant: {
+      id: user.id,
+      displayName: user.display_name,
+      experiencePoints: Number(user.experience_points || 0),
+      role: identity.identity.role,
+      communities: identity.identity.communities,
+    },
+    targetProject: {
+      id: project.id,
+      name: project.name,
+      tags: parseJson(project.tags_json, []),
+      goal: project.goal,
+      description: truncate(project.description, 500),
+      idealParticipant: project.ideal_participant || "",
+      notFitParticipant: project.not_fit_participant || "",
+      requiredCapabilities: parseJson(project.required_capabilities_json, []),
+    },
+    application,
+    projects: myProjects,
+    events: myEvents,
+    confirmedMemories: memoryRows.map((item) => ({ ...item, content: truncate(item.content, 160) })),
+    confirmedEvidence: evidenceRows.map((item) => ({ ...item, content: truncate(item.content, 160) })),
+  };
+}
+
+async function buildProjectApplicationReviewContext({ user, project, application, identity, retrievalOptions = {} }) {
+  const retrievalPlan = await buildProjectApplicationRetrievalPlan({
+    applicant: user,
+    project,
+    application,
+    identity,
+    options: retrievalOptions,
+  });
+  const planResults = await Promise.all(retrievalPlan.map(async (plan) => {
+    try {
+      return await searchEvidence(plan, user.id);
+    } catch (err) {
+      console.warn("parallel evidence search failed", plan.name, err.message);
+      return [];
+    }
+  }));
+  const results = planResults.flat();
   const evidence = bucketEvidence(results);
   const hardFacts = await getApplicationHardFacts(user, project, application, identity);
   return {
@@ -2589,8 +3773,47 @@ async function buildProjectApplicationReviewContext({ user, project, application
   };
 }
 
+async function runProjectApplicationAiReview({ user, project, application, identity, reviewContext }) {
+  const fallback = {
+    status: "pass",
+    summary: "秘书已收下申请。AI 初审暂未完成，先递交主理人查看。",
+  };
+  if (!aiConfigured()) return fallback;
+  try {
+    const context = reviewContext || await buildProjectApplicationReviewContext({ user, project, application, identity });
+    const generated = await callAi({
+      task: "project_application_secretary_review",
+      instruction:
+        SECRETARY_PROJECT_REVIEW_PROMPT ||
+        "你是项目主理人的功能型秘书。你只能基于 hardFacts 和 evidence 判断项目申请是否值得递交主理人。本人自述是弱证据，项目主理人评价和管理员密封证据是强证据。风险/不匹配证据不得当作正向能力。证据不足时不要编造。只返回JSON: {\"status\":\"pass|revise|reject\",\"summary\":\"不超过180字，必须说明主要依据、风险或证据不足\"}。",
+      schema: {
+        type: "object",
+        required: ["status", "summary"],
+        properties: {
+          status: { enum: ["pass", "revise", "reject"] },
+          summary: { type: "string" },
+        },
+      },
+      payload: context,
+    });
+    if (generated && ["pass", "revise", "reject"].includes(generated.status)) {
+      return { status: generated.status, summary: text(generated.summary, 1000) || fallback.summary };
+    }
+  } catch (err) {
+    console.warn("secretary review fallback", err.message);
+  }
+  return fallback;
+}
+
 async function vectorSearch(payload) {
+  if (VECTOR_PROVIDER === "reai_vdb") return reaiVectorSearch(payload);
   if (!VECTOR_SEARCH_URL || !VECTOR_SEARCH_API_KEY) return [];
+  const requestPayload = {
+    provider: VECTOR_PROVIDER,
+    collection: VECTOR_COLLECTION,
+    namespace: VECTOR_NAMESPACE,
+    ...payload,
+  };
   const response = await httpJson(
     VECTOR_SEARCH_URL,
     {
@@ -2598,18 +3821,28 @@ async function vectorSearch(payload) {
       headers: {
         Authorization: `Bearer ${VECTOR_SEARCH_API_KEY}`,
         "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(JSON.stringify(payload)),
+        "Content-Length": Buffer.byteLength(JSON.stringify(requestPayload)),
       },
+      timeoutCode: "VECTOR_TIMEOUT",
+      timeoutMessage: "向量检索接口超时",
     },
-    payload
+    requestPayload,
+    VECTOR_REQUEST_TIMEOUT_MS
   );
   return response.matches || response.data || [];
 }
 
 async function vectorUpsert(payload) {
+  if (VECTOR_PROVIDER === "reai_vdb") return reaiVectorUpsert(payload);
   if (!VECTOR_UPSERT_URL || !VECTOR_UPSERT_API_KEY) {
     throw codedError("VECTOR_UPSERT_NOT_CONFIGURED", "VectorDB 写入接口尚未配置");
   }
+  const requestPayload = {
+    provider: VECTOR_PROVIDER,
+    collection: VECTOR_COLLECTION,
+    namespace: VECTOR_NAMESPACE,
+    ...payload,
+  };
   return httpJson(
     VECTOR_UPSERT_URL,
     {
@@ -2617,11 +3850,499 @@ async function vectorUpsert(payload) {
       headers: {
         Authorization: `Bearer ${VECTOR_UPSERT_API_KEY}`,
         "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(JSON.stringify(payload)),
+        "Content-Length": Buffer.byteLength(JSON.stringify(requestPayload)),
+      },
+      timeoutCode: "VECTOR_TIMEOUT",
+      timeoutMessage: "向量写入接口超时",
+    },
+    requestPayload,
+    VECTOR_REQUEST_TIMEOUT_MS
+  );
+}
+
+function vectorUpsertConfigured() {
+  if (VECTOR_PROVIDER === "reai_vdb") return Boolean(REAI_VDB_PID && getReaiDefaultTags().length && REAI_API_KEY);
+  return Boolean(VECTOR_UPSERT_URL && VECTOR_UPSERT_API_KEY);
+}
+
+function vectorSearchConfigured() {
+  if (VECTOR_PROVIDER === "reai_vdb") return Boolean(REAI_VDB_PID && getReaiDefaultTags().length && REAI_API_KEY);
+  return Boolean(VECTOR_SEARCH_URL && VECTOR_SEARCH_API_KEY);
+}
+
+function getReaiDefaultTags() {
+  return parseList(process.env.REAI_DEFAULT_TAG_IDS || REAI_VDB_ID);
+}
+
+function getReaiSearchTags(payload = {}) {
+  const explicitTags = payload.reaiTags || (payload.filters && payload.filters.reai_tags);
+  const tags = parseList(explicitTags);
+  return tags.length ? tags : getReaiDefaultTags();
+}
+
+function getReaiDocumentTags(document = {}) {
+  const metadata = document.metadata || {};
+  return unique([
+    ...getReaiDefaultTags(),
+    ...parseList(document.reaiTags),
+    ...parseList(metadata.reai_tags),
+  ]);
+}
+
+function parseReaiKnowledgeContent(raw) {
+  const content = String(raw || "").trim();
+  const match = content.match(/^DAIMAO_META\s+({.*?})\s*\n([\s\S]*)$/);
+  if (!match) return { content, metadata: {} };
+  try {
+    return { content: match[2].trim(), metadata: JSON.parse(match[1]) };
+  } catch (err) {
+    return { content, metadata: {} };
+  }
+}
+
+async function reaiVectorSearch(payload) {
+  if (!vectorSearchConfigured()) return [];
+  const url = `${trimTrailingSlash(REAI_VDB_BASE_URL)}/vdb/${encodeURIComponent(REAI_VDB_PID)}/vector`;
+  const tags = getReaiSearchTags(payload);
+  if (!tags.length) return [];
+  const response = await httpJson(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${REAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      timeoutCode: "REAI_SEARCH_TIMEOUT",
+      timeoutMessage: "ReAI 知识库检索超时",
+    },
+    {
+      content: payload.query || payload.content || "",
+      query: {
+        tags,
+        _limit: Math.min(Math.max(Number(payload.topK || VECTOR_TOP_K), 1), 20),
       },
     },
-    payload
+    VECTOR_REQUEST_TIMEOUT_MS
   );
+  const list = response.data && Array.isArray(response.data.list) ? response.data.list : [];
+  return list.map((item, index) => {
+    const parsed = parseReaiKnowledgeContent(item.content || item.text || item);
+    return {
+      id: parsed.metadata.chunk_id || parsed.metadata.vector_doc_id || `reai_${index}_${sha256(parsed.content).slice(0, 12)}`,
+      score: item.score || item.similarity || item.distance || 0,
+      content: parsed.content,
+      metadata: {
+        ...parsed.metadata,
+        source_type: parsed.metadata.source_type || "external_knowledge",
+      },
+    };
+  });
+}
+
+async function reaiVectorUpsert(payload) {
+  if (!vectorUpsertConfigured()) {
+    throw codedError("REAI_UPSERT_NOT_CONFIGURED", "ReAI 知识库写入接口尚未配置，RAG 索引队列保持 pending");
+  }
+  const baseUrl = trimTrailingSlash(REAI_VDB_UPSERT_URL || `${trimTrailingSlash(REAI_VDB_BASE_URL)}/vdb/${encodeURIComponent(REAI_VDB_PID)}`);
+  const results = [];
+  for (const document of payload.documents || []) {
+    const existingObjectId = isReaiObjectId(document.id) ? document.id : "";
+    const url = existingObjectId ? `${baseUrl}/db/${encodeURIComponent(existingObjectId)}` : baseUrl;
+    const tags = getReaiDocumentTags(document);
+    if (!tags.length) throw codedError("REAI_TAG_NOT_CONFIGURED", "ReAI 知识库 tag 尚未配置");
+    const response = await httpJson(
+      url,
+      {
+        method: existingObjectId ? "PATCH" : "POST",
+        headers: {
+          Authorization: `Bearer ${REAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        timeoutCode: "REAI_UPSERT_TIMEOUT",
+        timeoutMessage: "ReAI 知识库写入超时",
+      },
+      {
+        content: formatReaiKnowledgeContent(document),
+        tags,
+      },
+      VECTOR_REQUEST_TIMEOUT_MS
+    );
+    const vectorDocId =
+      (response.data && response.data.vdb && response.data.vdb.objectId) ||
+      (response.data && response.data.objectId) ||
+      response.objectId ||
+      existingObjectId ||
+      document.id;
+    results.push({
+      chunkId: document.metadata && document.metadata.chunk_id,
+      vectorDocId,
+      tags,
+      status: response.status || response.message || "ok",
+    });
+  }
+  return { provider: "reai_vdb", upserted: results.length, documents: results };
+}
+
+function reaiConfiguredForAdminPatch() {
+  return Boolean(REAI_VDB_PID && REAI_API_KEY);
+}
+
+function validateReaiTagId(tagId) {
+  const value = text(tagId, 80);
+  if (!/^[A-Za-z0-9_-]{3,80}$/.test(value)) throw codedError("VALIDATION_ERROR", "ReAI tagId 格式不合法");
+  return value;
+}
+
+function getReaiProjectPayload(event) {
+  const input = event.projectPayload || event.reaiProjectPayload || event.payload;
+  const payload =
+    (input && input.options && input) ||
+    (input && input.project && input.project) ||
+    (input && input.data && input.data.project && input.data.project) ||
+    (input && input.data && input.data);
+  if (!payload || typeof payload !== "object") {
+    throw codedError("VALIDATION_ERROR", "请传入完整 projectPayload，必须包含 options.vdbFolderArr");
+  }
+  const folders = payload.options && payload.options.vdbFolderArr;
+  if (!Array.isArray(folders)) {
+    throw codedError("VALIDATION_ERROR", "projectPayload.options.vdbFolderArr 不存在，不能安全 PATCH ReAI 项目");
+  }
+  return JSON.parse(JSON.stringify(payload));
+}
+
+function patchReaiProjectTagPayload(projectPayload, operation, tagId, tagName) {
+  const payload = JSON.parse(JSON.stringify(projectPayload));
+  payload.options = payload.options || {};
+  const before = Array.isArray(payload.options.vdbFolderArr) ? payload.options.vdbFolderArr : [];
+  const folders = before.map((item) => ({ ...item }));
+  const index = folders.findIndex((item) => item && item.objectId === tagId);
+  if (operation === "create") {
+    if (index < 0) folders.push({ objectId: tagId, name: tagName || tagId, type: "file" });
+    else folders[index] = { ...folders[index], name: tagName || folders[index].name || tagId, type: folders[index].type || "file" };
+  } else if (operation === "rename") {
+    if (index < 0) throw codedError("REAI_TAG_NOT_FOUND", "要重命名的 ReAI tag 不在 projectPayload.options.vdbFolderArr 中");
+    folders[index] = { ...folders[index], name: tagName || folders[index].name || tagId, type: folders[index].type || "file" };
+  } else {
+    throw codedError("VALIDATION_ERROR", "operation 只支持 create 或 rename");
+  }
+  payload.options.vdbFolderArr = folders;
+  return {
+    payload,
+    before: before.map((item) => ({ objectId: item.objectId, name: item.name, type: item.type })),
+    after: folders.map((item) => ({ objectId: item.objectId, name: item.name, type: item.type })),
+  };
+}
+
+async function reaiPatchProjectPayload(projectPayload) {
+  if (!reaiConfiguredForAdminPatch()) throw codedError("REAI_NOT_CONFIGURED", "ReAI PID/API_KEY 未配置");
+  const url = `${trimTrailingSlash(REAI_VDB_BASE_URL)}/app/projects/${encodeURIComponent(REAI_VDB_PID)}`;
+  return httpJson(
+    url,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${REAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      timeoutCode: "REAI_PROJECT_PATCH_TIMEOUT",
+      timeoutMessage: "ReAI 项目 tag 配置更新超时",
+    },
+    projectPayload,
+    VECTOR_REQUEST_TIMEOUT_MS
+  );
+}
+
+async function reaiGetProjectPayload() {
+  if (!reaiConfiguredForAdminPatch()) throw codedError("REAI_NOT_CONFIGURED", "ReAI PID/API_KEY 未配置");
+  const url = `${trimTrailingSlash(REAI_VDB_BASE_URL)}/app/projects/${encodeURIComponent(REAI_VDB_PID)}`;
+  return httpJson(
+    url,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${REAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      timeoutCode: "REAI_PROJECT_GET_TIMEOUT",
+      timeoutMessage: "ReAI 项目配置读取超时",
+    },
+    null,
+    VECTOR_REQUEST_TIMEOUT_MS
+  );
+}
+
+async function adminReaiGetProject(event, user) {
+  await requireAdmin(user);
+  const response = await reaiGetProjectPayload();
+  const project = response && response.data && response.data.project ? response.data.project : response.project || response.data || response;
+  const folders = project && project.options && Array.isArray(project.options.vdbFolderArr) ? project.options.vdbFolderArr : [];
+  return {
+    pid: REAI_VDB_PID,
+    folderCount: folders.length,
+    folders: folders.map((item) => ({ objectId: item.objectId, name: item.name, type: item.type })),
+    project,
+  };
+}
+
+async function adminReaiProjectTagPatch(event, user) {
+  await requireAdmin(user);
+  const operation = event.operation === "rename" ? "rename" : "create";
+  const tagId = validateReaiTagId(event.tagId || event.userTagId || generateReaiTagId());
+  const tagName = text(event.tagName || event.name || tagId, 120);
+  const projectPayload = event.projectPayload || event.reaiProjectPayload || event.payload
+    ? getReaiProjectPayload(event)
+    : getReaiProjectPayload({ projectPayload: await reaiGetProjectPayload() });
+  const patched = patchReaiProjectTagPayload(projectPayload, operation, tagId, tagName);
+  const dryRun = event.dryRun !== false;
+  if (dryRun) {
+    return {
+      dryRun: true,
+      operation,
+      tagId,
+      tagName,
+      before: patched.before,
+      after: patched.after,
+      warning: "dryRun=true，不会调用 ReAI。正式 PATCH 需 dryRun=false 且 confirm=patch-reai-project-tags。",
+    };
+  }
+  if (event.confirm !== "patch-reai-project-tags") {
+    throw codedError("CONFIRM_REQUIRED", "正式 PATCH ReAI 项目 tag 需传入 confirm=patch-reai-project-tags");
+  }
+  const response = await reaiPatchProjectPayload(patched.payload);
+  await adminLog(user, `reai_project_tag_${operation}`, "reai_tag", null, { tagId, tagName });
+  return { dryRun: false, operation, tagId, tagName, response };
+}
+
+async function adminReaiPatchVdbTags(event, user) {
+  await requireAdmin(user);
+  if (!reaiConfiguredForAdminPatch()) throw codedError("REAI_NOT_CONFIGURED", "ReAI PID/API_KEY 未配置");
+  const objectId = text(event.objectId || event.vectorDocId, 120);
+  if (!objectId) throw codedError("VALIDATION_ERROR", "objectId 不能为空");
+  const tags = unique(parseList(event.tags || event.reaiTags));
+  if (!tags.length) throw codedError("VALIDATION_ERROR", "tags 不能为空");
+  const body = { tags };
+  if (event.content !== undefined) body.content = String(event.content || "");
+  const dryRun = event.dryRun !== false;
+  const url = `${trimTrailingSlash(REAI_VDB_BASE_URL)}/vdb/${encodeURIComponent(REAI_VDB_PID)}/db/${encodeURIComponent(objectId)}`;
+  if (dryRun) {
+    return {
+      dryRun: true,
+      url,
+      body,
+      warning: "dryRun=true，不会调用 ReAI。正式 PATCH 需 dryRun=false 且 confirm=patch-reai-vdb-tags。",
+    };
+  }
+  if (event.confirm !== "patch-reai-vdb-tags") {
+    throw codedError("CONFIRM_REQUIRED", "正式 PATCH ReAI 单条知识 tags 需传入 confirm=patch-reai-vdb-tags");
+  }
+  const response = await httpJson(
+    url,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${REAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      timeoutCode: "REAI_VDB_PATCH_TIMEOUT",
+      timeoutMessage: "ReAI 单条知识 tags 更新超时",
+    },
+    body,
+    VECTOR_REQUEST_TIMEOUT_MS
+  );
+  await adminLog(user, "reai_patch_vdb_tags", "reai_vdb", null, { objectId, tags });
+  return { dryRun: false, objectId, tags, response };
+}
+
+async function adminEnsureUserRagTag(event, user) {
+  await requireAdmin(user);
+  const targetUserId = id(event.userId || event.targetUserId);
+  const targetUser = await findUserById(targetUserId);
+  const memberships = await getCommunityMemberships(targetUserId);
+  if (!memberships.length && !event.force) {
+    return {
+      eligible: false,
+      reason: "用户没有有效社区认证。若要强制创建，请传 force=true。",
+      user: { id: targetUser.id, displayName: targetUser.display_name },
+    };
+  }
+  const existing = await getActiveUserRagTag(targetUserId);
+  if (existing && !event.recreate) {
+    return { eligible: true, existed: true, tag: existing };
+  }
+  const tagId = validateReaiTagId(event.tagId || event.userTagId || generateReaiTagId());
+  const tagName = text(event.tagName || `${REAI_USER_TAG_PREFIX}${targetUserId}_${targetUser.display_name || targetUserId}`, 120);
+  const dryRun = event.dryRun !== false;
+  let patchResult = null;
+  if (event.projectPayload) {
+    const projectPayload = getReaiProjectPayload(event);
+    const patched = patchReaiProjectTagPayload(projectPayload, "create", tagId, tagName);
+    if (dryRun) {
+      return {
+        eligible: true,
+        dryRun: true,
+        user: { id: targetUser.id, displayName: targetUser.display_name },
+        tag: { userTagId: tagId, tagName },
+        before: patched.before,
+        after: patched.after,
+        warning: "dryRun=true，不会创建 SQL 绑定，也不会 PATCH ReAI。正式创建需 dryRun=false 且 confirm=ensure-user-rag-tag。",
+      };
+    }
+    if (event.confirm !== "ensure-user-rag-tag") {
+      throw codedError("CONFIRM_REQUIRED", "正式创建用户 ReAI tag 需传入 confirm=ensure-user-rag-tag");
+    }
+    patchResult = await reaiPatchProjectPayload(patched.payload);
+  } else if (!dryRun && event.confirm !== "ensure-user-rag-tag") {
+    throw codedError("CONFIRM_REQUIRED", "正式写入用户 tag 绑定需传入 confirm=ensure-user-rag-tag");
+  } else if (dryRun) {
+    return {
+      eligible: true,
+      dryRun: true,
+      user: { id: targetUser.id, displayName: targetUser.display_name },
+      tag: { userTagId: tagId, tagName },
+      warning: "未传 projectPayload，只能预览或仅写 SQL 绑定；自动创建 ReAI tag 需要完整 projectPayload。",
+    };
+  }
+  const saved = await saveUserRagTagRecord({
+    userId: targetUserId,
+    userTagId: tagId,
+    tagName,
+    status: "active",
+    createdReason: event.reason || "admin_ensure",
+  });
+  await adminLog(user, "ensure_user_rag_tag", "user", targetUserId, { tagId, tagName });
+  return { eligible: true, existed: false, tag: saved, patchResult };
+}
+
+async function adminRequeueUserRagIndex(event, user) {
+  await requireAdmin(user);
+  const targetUserId = id(event.userId || event.targetUserId);
+  const targetUser = await findUserById(targetUserId);
+  const userRagTag = await getActiveUserRagTag(targetUserId);
+  if (!userRagTag || !userRagTag.user_tag_id) {
+    throw codedError("USER_RAG_TAG_MISSING", "该用户还没有 active 的 ReAI 个人 tag，请先执行 adminEnsureUserRagTag");
+  }
+  const limit = Math.min(Math.max(Number(event.limit || 200), 1), 1000);
+  let sources = [];
+  if (useRdb()) {
+    sources = await rdbSelect("rag_sources", "id,source_type,title,status", (request) =>
+      request.eq("owner_user_id", targetUserId).in("status", ["pending", "indexed", "failed", "stale"]).limit(limit)
+    );
+    for (const source of sources) {
+      await rdbUpdate("rag_sources", { status: "stale", error_message: null }, (request) => request.eq("id", source.id));
+      await rdbUpdate("rag_chunks", { status: "pending", indexed_at: null }, (request) =>
+        request.eq("source_id", source.id).in("status", ["indexed", "failed", "pending"])
+      );
+      await rdbInsert("rag_index_jobs", { source_id: source.id, job_type: "reindex", status: "pending" });
+    }
+  } else {
+    sources = await query(
+      "SELECT id,source_type,title,status FROM rag_sources WHERE owner_user_id=? AND status IN ('pending','indexed','failed','stale') LIMIT ?",
+      [targetUserId, limit]
+    );
+    for (const source of sources) {
+      await query("UPDATE rag_sources SET status='stale',error_message=NULL WHERE id=?", [source.id]);
+      await query("UPDATE rag_chunks SET status='pending',indexed_at=NULL WHERE source_id=? AND status IN ('indexed','failed','pending')", [source.id]);
+      await query("INSERT INTO rag_index_jobs (source_id,job_type,status) VALUES (?,'reindex','pending')", [source.id]);
+    }
+  }
+  await adminLog(user, "requeue_user_rag_index", "user", targetUserId, {
+    sourceCount: sources.length,
+    userTagId: userRagTag.user_tag_id,
+  });
+  return {
+    user: { id: targetUser.id, displayName: targetUser.display_name },
+    userTag: { userTagId: userRagTag.user_tag_id, tagName: userRagTag.tag_name },
+    queuedSources: sources.length,
+    sources: sources.slice(0, 50),
+  };
+}
+
+function buildVectorDocuments(job, chunks) {
+  const sourceMetadata = parseJson(job.metadata_json, {});
+  return chunks.map((chunk) => {
+    const content = String(chunk.content || "");
+    const vectorDocId = chunk.vector_doc_id || `rag_${job.source_id}_${chunk.chunk_index}`;
+    return {
+      id: vectorDocId,
+      content,
+      short_text: truncate(chunk.content_summary || content, 220),
+      text_hash: sha256(content),
+      metadata: {
+        rag_source_id: job.source_id,
+        chunk_id: chunk.id,
+        source_type: job.source_type,
+        source_id: job.business_source_id || job.source_id,
+        owner_user_id: job.owner_user_id || null,
+        project_id: job.project_id || null,
+        event_id: job.event_id || null,
+        community_id: job.community_id || null,
+        title: job.title || "",
+        tags: parseJson(job.tags_json, []),
+        visibility: job.visibility || "match_only",
+        source_trust: job.source_trust || "self_reported",
+        version: Number(job.version || 1),
+        evidence_polarity: chunk.evidence_polarity || detectPolarity(content),
+        confidence: Number(chunk.confidence || confidenceForSource(job.source_type, chunk.evidence_polarity)),
+        short_text: truncate(chunk.content_summary || content, 220),
+        text_hash: sha256(content),
+        reai_tags: unique([
+          ...parseList(sourceMetadata.reai_tags),
+          ...parseList(job.user_reai_tag_id),
+        ]),
+        metadata: sourceMetadata,
+      },
+    };
+  });
+}
+
+function isReaiObjectId(value) {
+  const idValue = String(value || "");
+  return Boolean(idValue) && !/^rag_\d+_\d+$/.test(idValue);
+}
+
+function formatReaiKnowledgeContent(document) {
+  const metadata = document.metadata || {};
+  const payload = {
+    chunk_id: metadata.chunk_id || null,
+    rag_source_id: metadata.rag_source_id || null,
+    source_type: metadata.source_type || "",
+    source_id: metadata.source_id || null,
+    owner_user_id: metadata.owner_user_id || null,
+    project_id: metadata.project_id || null,
+    event_id: metadata.event_id || null,
+    community_id: metadata.community_id || null,
+    reai_tags: parseList(metadata.reai_tags),
+    visibility: metadata.visibility || "match_only",
+    source_trust: metadata.source_trust || "self_reported",
+    evidence_polarity: metadata.evidence_polarity || "neutral",
+    confidence: Number(metadata.confidence || 0),
+    text_hash: metadata.text_hash || document.text_hash || sha256(document.content),
+  };
+  return `DAIMAO_META ${JSON.stringify(payload)}\n${String(document.content || "").trim()}`;
+}
+
+async function applyVectorUpsertResultsMysql(connection, sourceId, response) {
+  const documents = response && Array.isArray(response.documents) ? response.documents : [];
+  for (const document of documents) {
+    if (!document.chunkId || !document.vectorDocId) continue;
+    await connection.execute(
+      "UPDATE rag_chunks SET vector_doc_id=? WHERE id=? AND source_id=?",
+      [String(document.vectorDocId), Number(document.chunkId), Number(sourceId)]
+    );
+  }
+}
+
+async function applyVectorUpsertResultsRdb(sourceId, response) {
+  const documents = response && Array.isArray(response.documents) ? response.documents : [];
+  for (const document of documents) {
+    if (!document.chunkId || !document.vectorDocId) continue;
+    await rdbUpdate(
+      "rag_chunks",
+      { vector_doc_id: String(document.vectorDocId) },
+      (request) => request.eq("id", document.chunkId).eq("source_id", sourceId)
+    );
+  }
 }
 
 async function processRagIndexJobs(event, user) {
@@ -2633,9 +4354,23 @@ async function processRagIndexJobs(event, user) {
     await requireAdmin(user);
   }
   const limit = Math.min(Math.max(Number(event.limit || 10), 1), 50);
+  if (!vectorUpsertConfigured()) {
+    return {
+      checked: 0,
+      completed: 0,
+      failed: 0,
+      skipped: true,
+      code: "VECTOR_UPSERT_NOT_CONFIGURED",
+      message: "VectorDB 写入接口尚未配置，RAG 索引队列保持 pending",
+      provider: VECTOR_PROVIDER,
+      collection: VECTOR_COLLECTION,
+      namespace: VECTOR_NAMESPACE,
+    };
+  }
+  if (useRdb()) return processRagIndexJobsRdb(limit);
   const jobs = await query(
     `SELECT rij.*, rs.source_type, rs.source_id AS business_source_id, rs.owner_user_id, rs.project_id, rs.event_id,
-      rs.community_id, rs.title, rs.tags_json, rs.visibility, rs.version, rs.metadata_json
+      rs.community_id, rs.title, rs.tags_json, rs.visibility, rs.source_trust, rs.version, rs.metadata_json
      FROM rag_index_jobs rij
      JOIN rag_sources rs ON rs.id = rij.source_id
      WHERE rij.status='pending' AND rs.status IN ('pending','failed','stale','indexing')
@@ -2651,29 +4386,14 @@ async function processRagIndexJobs(event, user) {
         `SELECT * FROM rag_chunks WHERE source_id=? AND status IN ('pending','failed') ORDER BY chunk_index ASC`,
         [job.source_id]
       );
-      const documents = chunks.map((chunk) => ({
-        id: chunk.vector_doc_id || `rag_${job.source_id}_${chunk.chunk_index}`,
-        content: chunk.content,
-        metadata: {
-          rag_source_id: job.source_id,
-          chunk_id: chunk.id,
-          source_type: job.source_type,
-          source_id: job.business_source_id,
-          owner_user_id: job.owner_user_id,
-          project_id: job.project_id,
-          event_id: job.event_id,
-          community_id: job.community_id,
-          title: job.title,
-          tags: parseJson(job.tags_json, []),
-          visibility: job.visibility,
-          version: job.version,
-          evidence_polarity: chunk.evidence_polarity,
-          confidence: Number(chunk.confidence || 0.7),
-          metadata: parseJson(job.metadata_json, {}),
-        },
-      }));
-      if (documents.length) await vectorUpsert({ documents, sourceId: job.source_id, jobType: job.job_type });
+      const userRagTag = job.owner_user_id ? await getActiveUserRagTag(job.owner_user_id) : null;
+      if (userRagTag && userRagTag.user_tag_id) job.user_reai_tag_id = userRagTag.user_tag_id;
+      const documents = buildVectorDocuments(job, chunks);
+      const upsertResponse = documents.length
+        ? await vectorUpsert({ documents, sourceId: job.source_id, jobType: job.job_type })
+        : null;
       await transaction(async (connection) => {
+        if (upsertResponse) await applyVectorUpsertResultsMysql(connection, job.source_id, upsertResponse);
         await connection.execute(
           "UPDATE rag_chunks SET status='indexed',indexed_at=NOW() WHERE source_id=? AND status IN ('pending','failed')",
           [job.source_id]
@@ -2691,6 +4411,109 @@ async function processRagIndexJobs(event, user) {
   return { checked: jobs.length, completed, failed };
 }
 
+async function processRagIndexJobsRdb(limit) {
+  const pendingJobs = await rdbSelect("rag_index_jobs", "*", (request) =>
+    request.eq("status", "pending").order("created_at", { ascending: true }).limit(limit)
+  );
+  const sourceIds = unique(pendingJobs.map((job) => String(job.source_id))).map(Number).filter(Boolean);
+  const sources = sourceIds.length
+    ? await rdbSelect("rag_sources", "*", (request) =>
+        request.in("id", sourceIds).in("status", ["pending", "failed", "stale", "indexing"]).limit(sourceIds.length)
+      )
+    : [];
+  const sourceMap = new Map(sources.map((source) => [Number(source.id), source]));
+  let completed = 0;
+  let failed = 0;
+  const now = nowDateTime();
+
+  for (const pendingJob of pendingJobs) {
+    const jobSource = sourceMap.get(Number(pendingJob.source_id));
+    if (!jobSource) {
+      await rdbUpdate(
+        "rag_index_jobs",
+        {
+          status: "failed",
+          attempts: Number(pendingJob.attempts || 0) + 1,
+          completed_at: now,
+          error_message: "RAG source 不存在或状态不可索引",
+        },
+        (request) => request.eq("id", pendingJob.id)
+      );
+      failed += 1;
+      continue;
+    }
+
+    const job = {
+      ...pendingJob,
+      source_type: jobSource.source_type,
+      business_source_id: jobSource.source_id,
+      owner_user_id: jobSource.owner_user_id,
+      project_id: jobSource.project_id,
+      event_id: jobSource.event_id,
+      community_id: jobSource.community_id,
+      title: jobSource.title,
+      tags_json: jobSource.tags_json,
+      visibility: jobSource.visibility,
+      source_trust: jobSource.source_trust,
+      version: jobSource.version,
+      metadata_json: jobSource.metadata_json,
+    };
+
+    await rdbUpdate(
+      "rag_index_jobs",
+      { status: "processing", attempts: Number(pendingJob.attempts || 0) + 1, started_at: nowDateTime() },
+      (request) => request.eq("id", pendingJob.id)
+    );
+    await rdbUpdate("rag_sources", { status: "indexing" }, (request) => request.eq("id", job.source_id));
+
+    try {
+      const chunks = await rdbSelect("rag_chunks", "*", (request) =>
+        request.eq("source_id", job.source_id).in("status", ["pending", "failed"]).order("chunk_index", { ascending: true }).limit(200)
+      );
+      const userRagTag = job.owner_user_id ? await getActiveUserRagTag(job.owner_user_id) : null;
+      if (userRagTag && userRagTag.user_tag_id) job.user_reai_tag_id = userRagTag.user_tag_id;
+      const documents = buildVectorDocuments(job, chunks);
+      const upsertResponse = documents.length
+        ? await vectorUpsert({ documents, sourceId: job.source_id, jobType: job.job_type })
+        : null;
+
+      const indexedAt = nowDateTime();
+      if (upsertResponse) await applyVectorUpsertResultsRdb(job.source_id, upsertResponse);
+      for (const chunk of chunks) {
+        await rdbUpdate("rag_chunks", { status: "indexed", indexed_at: indexedAt }, (request) => request.eq("id", chunk.id));
+      }
+      await rdbUpdate(
+        "rag_sources",
+        { status: "indexed", last_indexed_at: indexedAt, error_message: null },
+        (request) => request.eq("id", job.source_id)
+      );
+      await rdbUpdate(
+        "rag_index_jobs",
+        { status: "completed", completed_at: indexedAt, error_message: null },
+        (request) => request.eq("id", pendingJob.id)
+      );
+      completed += 1;
+    } catch (err) {
+      const message = text(err.message, 4000);
+      await rdbUpdate("rag_sources", { status: "failed", error_message: message }, (request) => request.eq("id", job.source_id));
+      await rdbUpdate(
+        "rag_index_jobs",
+        { status: "failed", completed_at: nowDateTime(), error_message: message },
+        (request) => request.eq("id", pendingJob.id)
+      );
+      failed += 1;
+    }
+  }
+  return {
+    checked: pendingJobs.length,
+    completed,
+    failed,
+    provider: VECTOR_PROVIDER,
+    collection: VECTOR_COLLECTION,
+    namespace: VECTOR_NAMESPACE,
+  };
+}
+
 const actions = {
   healthCheck,
   listProjects,
@@ -2699,6 +4522,7 @@ const actions = {
   getProject,
   createProject,
   applyProject,
+  processProjectApplicationReviews,
   processRagIndexJobs,
   toggleWatch,
   publishUpdate,
@@ -2728,13 +4552,49 @@ const actions = {
   adminListEvents,
   adminCreateEvent,
   adminUpdateEvent,
-  adminReviewCandidate
+  adminReviewCandidate,
+  adminCreateProjectMemberReview,
+  adminCreateUserEvidence,
+  adminCreateCommunityMemberEvidence,
+  adminReaiGetProject,
+  adminReaiProjectTagPatch,
+  adminReaiPatchVdbTags,
+  adminEnsureUserRagTag,
+  adminRequeueUserRagIndex,
+  adminDebugProjectApplicationInput,
+  adminTestSingleEvidenceSearch,
+  adminTestProjectApplicationEvidence,
+  adminTestProjectApplicationReview
 };
 
 exports.main = async (event) => {
   try {
+    console.log("daimaoBusiness action start", {
+      action: event && event.action,
+      hasAdminWebToken: Boolean(event && event.adminWebToken),
+      driver: process.env.BUSINESS_DB_DRIVER || "mysql",
+    });
+    if (event.action === "debugEcho") {
+      return {
+        success: true,
+        action: event.action,
+        time: new Date().toISOString(),
+        driver: process.env.BUSINESS_DB_DRIVER || "mysql",
+        cloudbaseEnv: process.env.CLOUDBASE_ENV || "",
+        aiConfigured: aiConfigured(),
+        vectorProvider: VECTOR_PROVIDER,
+      };
+    }
+    if (event.action === "adminDebugDirectSqlSmoke") {
+      const data = await adminDebugDirectSqlSmoke(event);
+      return { success: true, ...data };
+    }
     if (event.action === "healthCheck") {
       const data = await healthCheck();
+      return { success: true, ...data };
+    }
+    if (event.action === "testAiConnection") {
+      const data = await testAiConnection(event);
       return { success: true, ...data };
     }
     if (event.action === "seedDemoData") {
@@ -2760,6 +4620,10 @@ exports.main = async (event) => {
     }
     if (event.action === "processRagIndexJobs" && event.schedulerSecret) {
       const data = await processRagIndexJobs(event, null);
+      return { success: true, ...data };
+    }
+    if (event.action === "processProjectApplicationReviews" && event.schedulerSecret) {
+      const data = await processProjectApplicationReviews(event, null);
       return { success: true, ...data };
     }
     const handler = actions[event.action];

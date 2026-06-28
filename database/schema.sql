@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS communities (
   name VARCHAR(120) NOT NULL,
   badge_name VARCHAR(40) NOT NULL,
   description TEXT NULL,
+  logo_url VARCHAR(1000) NOT NULL DEFAULT '',
   personality_tags_json JSON NULL,
   certification_method ENUM('review_meeting','paid_event','admin_invite','manual_review','custom') NOT NULL DEFAULT 'manual_review',
   status ENUM('active','paused','archived') NOT NULL DEFAULT 'active',
@@ -86,6 +87,25 @@ CREATE TABLE IF NOT EXISTS community_memberships (
   KEY idx_memberships_user (user_id, status),
   CONSTRAINT fk_membership_community FOREIGN KEY (community_id) REFERENCES communities(id),
   CONSTRAINT fk_membership_user FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_rag_tags (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id BIGINT UNSIGNED NOT NULL,
+  provider VARCHAR(40) NOT NULL DEFAULT 'reai_vdb',
+  project_tag_id VARCHAR(80) NOT NULL DEFAULT '',
+  user_tag_id VARCHAR(80) NOT NULL DEFAULT '',
+  tag_name VARCHAR(120) NOT NULL DEFAULT '',
+  status ENUM('pending','active','inactive','failed') NOT NULL DEFAULT 'pending',
+  created_reason VARCHAR(60) NOT NULL DEFAULT '',
+  error_message TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_user_rag_provider (user_id, provider),
+  KEY idx_user_rag_tag (provider, user_tag_id),
+  KEY idx_user_rag_status (provider, status),
+  CONSTRAINT fk_user_rag_tags_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS user_experience_events (
@@ -151,7 +171,7 @@ CREATE TABLE IF NOT EXISTS project_applications (
 
 CREATE TABLE IF NOT EXISTS rag_sources (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  source_type ENUM('profile','card','event_record','project_record','feedback','admin_note','project','event','offline_transcript') NOT NULL,
+  source_type ENUM('profile','card','event_record','project_record','project_member_review','feedback','admin_note','admin_evidence','admin_interview','project','event','offline_transcript') NOT NULL,
   source_id BIGINT UNSIGNED NOT NULL,
   owner_user_id BIGINT UNSIGNED NULL,
   project_id BIGINT UNSIGNED NULL,
@@ -160,7 +180,8 @@ CREATE TABLE IF NOT EXISTS rag_sources (
   title VARCHAR(180) NOT NULL DEFAULT '',
   summary TEXT NULL,
   tags_json JSON NULL,
-  visibility ENUM('private','match_only','project_visible','public','admin_only') NOT NULL DEFAULT 'private',
+  visibility ENUM('private','profile_visible','agent_chat','match_only','project_visible','public','admin_only','sealed') NOT NULL DEFAULT 'private',
+  source_trust ENUM('self_reported','system_observed','owner_review','admin_note','admin_interview','verified_record','transcript_raw','transcript_verified') NOT NULL DEFAULT 'self_reported',
   status ENUM('pending','indexing','indexed','failed','stale','archived') NOT NULL DEFAULT 'pending',
   version INT UNSIGNED NOT NULL DEFAULT 1,
   text_hash CHAR(64) NOT NULL DEFAULT '',
@@ -176,6 +197,32 @@ CREATE TABLE IF NOT EXISTS rag_sources (
   KEY idx_rag_sources_status (status, updated_at),
   CONSTRAINT fk_rag_sources_owner FOREIGN KEY (owner_user_id) REFERENCES users(id),
   CONSTRAINT fk_rag_sources_project FOREIGN KEY (project_id) REFERENCES projects(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS project_member_reviews (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  project_id BIGINT UNSIGNED NOT NULL,
+  reviewer_user_id BIGINT UNSIGNED NOT NULL,
+  reviewed_user_id BIGINT UNSIGNED NOT NULL,
+  role VARCHAR(80) NOT NULL DEFAULT '',
+  contribution_text TEXT NOT NULL,
+  outcome_text TEXT NULL,
+  risk_text TEXT NULL,
+  reliability_score TINYINT UNSIGNED NULL,
+  collaboration_score TINYINT UNSIGNED NULL,
+  delivery_score TINYINT UNSIGNED NULL,
+  source_file_id BIGINT UNSIGNED NULL,
+  visibility ENUM('admin_only','sealed','match_only') NOT NULL DEFAULT 'sealed',
+  status ENUM('draft','confirmed','archived') NOT NULL DEFAULT 'confirmed',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_project_member_review (project_id, reviewer_user_id, reviewed_user_id),
+  KEY idx_project_member_reviews_user (reviewed_user_id, status, updated_at),
+  KEY idx_project_member_reviews_project (project_id, status),
+  CONSTRAINT fk_pmr_project FOREIGN KEY (project_id) REFERENCES projects(id),
+  CONSTRAINT fk_pmr_reviewer FOREIGN KEY (reviewer_user_id) REFERENCES users(id),
+  CONSTRAINT fk_pmr_reviewed FOREIGN KEY (reviewed_user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS rag_chunks (
@@ -521,18 +568,20 @@ CREATE TABLE IF NOT EXISTS evidence_records (
   user_id BIGINT UNSIGNED NOT NULL,
   project_id BIGINT UNSIGNED NULL,
   event_id BIGINT UNSIGNED NULL,
+  community_id BIGINT UNSIGNED NULL,
   source_type VARCHAR(60) NOT NULL,
   source_id BIGINT UNSIGNED NULL,
-  evidence_type ENUM('joined_event','event_speaker','project_creator','project_member','completed_task','missed_task','useful_connection','positive_feedback','negative_feedback','admin_note') NOT NULL,
+  evidence_type ENUM('joined_event','event_speaker','project_creator','project_member','completed_task','missed_task','useful_connection','positive_feedback','negative_feedback','admin_note','admin_interview','admin_evidence','risk_note','owner_review') NOT NULL,
   content TEXT NOT NULL,
   evidence_level ENUM('self_claim','conversation_observed','platform_observed','collaboration_verified','admin_verified') NOT NULL,
   confidence DECIMAL(5,4) NOT NULL DEFAULT 0,
-  visibility ENUM('private','match_only','project_visible','public','admin_only') NOT NULL DEFAULT 'private',
+  visibility ENUM('private','match_only','project_visible','public','admin_only','sealed') NOT NULL DEFAULT 'private',
   status ENUM('candidate','confirmed','rejected') NOT NULL DEFAULT 'candidate',
   created_by BIGINT UNSIGNED NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  KEY idx_evidence_user (user_id, status, evidence_level)
+  KEY idx_evidence_user (user_id, status, evidence_level),
+  KEY idx_evidence_community (community_id, status, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS recommendation_candidates (

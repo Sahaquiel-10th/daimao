@@ -1,0 +1,13 @@
+{
+  "name": "daimao-vector-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check vector.js"
+  },
+  "dependencies": {
+    "@zilliz/milvus2-sdk-node": "^2.5.11"
+  }
+}

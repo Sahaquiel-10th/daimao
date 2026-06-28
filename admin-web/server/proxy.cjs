@@ -65,7 +65,7 @@ function readJson(request) {
     let size = 0;
     request.on("data", (chunk) => {
       size += chunk.length;
-      if (size > 1024 * 1024) {
+      if (size > 12 * 1024 * 1024) {
         reject(new Error("请求体过大"));
         request.destroy();
         return;
@@ -312,18 +312,53 @@ async function adminSaveUserCommunity(data) {
   return { success: true, saved: true };
 }
 
-async function adminUpdateCommunity(data) {
+async function adminRevokeUserCommunity(data) {
+  const userId = id(data.userId, "userId");
   const communityId = id(data.communityId, "communityId");
+  await rdbUpdate("community_memberships", { status: "revoked" }, (request) =>
+    request.eq("community_id", communityId).eq("user_id", userId)
+  );
+  return { success: true, saved: true };
+}
+
+async function adminUpdateCommunity(data) {
+  const communityId = data.communityId ? id(data.communityId, "communityId") : null;
   const patch = data.patch || {};
   const values = {};
   if (patch.name !== undefined) values.name = text(patch.name, 120);
-  if (patch.badgeName !== undefined) values.badge_name = text(patch.badgeName, 120);
+  if (patch.badgeName !== undefined) values.badge_name = text(patch.badgeName, 40);
+  if (patch.description !== undefined) values.description = text(patch.description, 3000);
   if (patch.logoUrl !== undefined) values.logo_url = text(patch.logoUrl, 1000);
-  if (patch.status !== undefined) values.status = patch.status === "disabled" ? "disabled" : "active";
+  if (patch.certificationMethod !== undefined) {
+    values.certification_method = ["review_meeting", "paid_event", "admin_invite", "manual_review", "custom"].includes(patch.certificationMethod)
+      ? patch.certificationMethod
+      : "manual_review";
+  }
+  if (patch.status !== undefined) values.status = ["paused", "archived"].includes(patch.status) ? patch.status : "active";
   if (patch.sortWeight !== undefined) values.sort_weight = Number(patch.sortWeight || 0);
   if (!Object.keys(values).length) return { success: true, saved: false };
-  await rdbUpdate("communities", values, (request) => request.eq("id", communityId));
-  return { success: true, saved: true };
+  if (communityId) {
+    await rdbUpdate("communities", values, (request) => request.eq("id", communityId));
+    return { success: true, saved: true, communityId };
+  }
+  if (!values.name || !values.badge_name) {
+    const error = new Error("新建社区需要填写社区名称和徽章名称");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+  await rdbInsert("communities", {
+    name: values.name,
+    badge_name: values.badge_name,
+    description: values.description || "",
+    logo_url: values.logo_url || "",
+    certification_method: values.certification_method || "manual_review",
+    status: values.status || "active",
+    sort_weight: values.sort_weight || 0,
+  });
+  const rows = await rdbSelect("communities", "id", (request) =>
+    request.eq("name", values.name).order("created_at", { ascending: false }).limit(1)
+  );
+  return { success: true, saved: true, communityId: rows[0] && rows[0].id };
 }
 
 async function saveCoverAfterBusiness(data, result) {
@@ -343,11 +378,12 @@ async function adminProxyAction(data) {
     if (!result || !result.success) return result;
     return enrichAdminList(result);
   }
-  if (["adminUpdateUser", "adminDeleteUser", "adminSaveUserCommunity", "adminUpdateCommunity"].includes(data.action)) {
+  if (["adminUpdateUser", "adminDeleteUser", "adminSaveUserCommunity", "adminRevokeUserCommunity", "adminUpdateCommunity"].includes(data.action)) {
     await assertAdmin(data);
     if (data.action === "adminUpdateUser") return adminUpdateUser(data);
     if (data.action === "adminDeleteUser") return adminDeleteUser(data);
     if (data.action === "adminUpdateCommunity") return adminUpdateCommunity(data);
+    if (data.action === "adminRevokeUserCommunity") return adminRevokeUserCommunity(data);
     return adminSaveUserCommunity(data);
   }
   const result = await callBusiness(businessData(data));
