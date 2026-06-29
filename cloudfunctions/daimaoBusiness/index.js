@@ -1028,6 +1028,8 @@ async function upsertRagSourceForCurrentDriver(source) {
 async function currentUser(event = {}) {
   const context = cloud.getWXContext();
   const openid = context.FROM_OPENID || context.OPENID;
+  const unionid = context.UNIONID || "";
+  const sourceAppid = context.APPID || context.FROM_APPID || process.env.WX_APPID || "cloudbase-default";
   if (event.adminWebToken) {
     if (!process.env.ADMIN_WEB_TOKEN || event.adminWebToken !== process.env.ADMIN_WEB_TOKEN) {
       throw codedError("FORBIDDEN", "管理员网页令牌不正确");
@@ -1052,16 +1054,43 @@ async function currentUser(event = {}) {
   if (!openid) throw codedError("LOGIN_REQUIRED", "无法识别当前微信用户");
   const displayName = text(context.NICKNAME, 80);
   if (useRdb()) {
-    const existing = await rdbSelect("users", "*", (request) => request.eq("openid", openid).limit(1));
-    if (existing[0]) {
-      if (displayName) await rdbUpdate("users", { display_name: displayName }, (request) => request.eq("id", existing[0].id));
-      const rows = await rdbSelect("users", "*", (request) => request.eq("openid", openid).limit(1));
-      const user = rows[0];
+    const identityRows = await rdbSelect("user_identities", "*", (request) =>
+      request.eq("source_appid", sourceAppid).eq("openid", openid).eq("status", "active").limit(1)
+    ).catch(() => []);
+    if (identityRows[0]) {
+      await rdbUpdate(
+        "user_identities",
+        { last_seen_at: nowDateTime(), unionid: unionid || identityRows[0].unionid || "" },
+        (request) => request.eq("id", identityRows[0].id)
+      ).catch(() => {});
+      if (displayName) await rdbUpdate("users", { display_name: displayName }, (request) => request.eq("id", identityRows[0].user_id));
+      const user = (await rdbSelect("users", "*", (request) => request.eq("id", identityRows[0].user_id).limit(1)))[0];
       if (!user || user.status !== "active") throw codedError("USER_DISABLED", "当前账号不可用");
       return user;
     }
-    const inserted = await rdbInsert("users", { openid, display_name: displayName });
-    const user = Array.isArray(inserted) && inserted[0] ? inserted[0] : (await rdbSelect("users", "*", (request) => request.eq("openid", openid).limit(1)))[0];
+
+    const legacyUsers = await rdbSelect("users", "*", (request) => request.eq("openid", openid).limit(1));
+    let user = legacyUsers[0];
+    if (user && displayName) await rdbUpdate("users", { display_name: displayName }, (request) => request.eq("id", user.id));
+    if (!user) {
+      const inserted = await rdbInsert("users", { openid, unionid, display_name: displayName });
+      user = Array.isArray(inserted) && inserted[0] ? inserted[0] : (await rdbSelect("users", "*", (request) => request.eq("openid", openid).limit(1)))[0];
+    }
+    if (user) {
+      await rdbInsert("user_identities", {
+        user_id: user.id,
+        source_appid: sourceAppid,
+        openid,
+        unionid,
+        identity_type: "wechat_miniprogram",
+        status: "active",
+        last_seen_at: nowDateTime(),
+      }).catch(async () => {
+        await rdbUpdate("user_identities", { user_id: user.id, unionid, status: "active", last_seen_at: nowDateTime() }, (request) =>
+          request.eq("source_appid", sourceAppid).eq("openid", openid)
+        ).catch(() => {});
+      });
+    }
     if (!user || user.status !== "active") throw codedError("USER_DISABLED", "当前账号不可用");
     return user;
   }
