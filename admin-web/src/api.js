@@ -247,8 +247,14 @@ const mockState = {
     { id: 10, community_id: 1, name: "AI 销售线索整理小助手", status: "active", visibility: "public", is_official_recommended: 1, official_sort_weight: 100, star_count: 42, stage: "招募共创", tags: ["AI", "销售"], updated_at: now },
     { id: 11, community_id: 1, name: "城市私董会活动运营系统", status: "draft", visibility: "private", is_official_recommended: 0, official_sort_weight: 20, star_count: 8, stage: "内测", tags: ["社区", "活动"], updated_at: now },
   ],
+  projectApplications: [
+    { id: 101, project_id: 10, user_id: 2, message: "我想参与线索整理", status: "pending_secretary_review", ai_review_status: "pending", created_at: now },
+  ],
   events: [
     { id: 20, community_id: 1, title: "OPC 项目评审会", event_type: "project_review", location: "上海", status: "published", visibility: "public", start_time: now, capacity: 20 },
+  ],
+  adminLogs: [
+    { id: 1, admin_user_id: 1, action: "mock_login", target_type: "admin", target_id: 1, detail_json: { source: "mock" }, created_at: now },
   ],
   ragSources: [
     { id: 30, source_type: "profile", title: "阿里 AI 产品顾问资料", status: "indexed", visibility: "match_only", updated_at: now },
@@ -330,6 +336,11 @@ async function mockCall(action, data) {
     }
     mockState.projects = mockState.projects.map((item) => item.id === data.projectId ? { ...item, ...patch } : item);
     return { success: true, saved: true };
+  }
+  if (action === "adminCreateProject") {
+    const project = { id: Date.now(), ...data.project, community_id: data.project?.communityId || data.project?.community_id || null, creator_user_id: data.project?.creatorUserId || data.project?.creator_user_id || 1, updated_at: now };
+    mockState.projects = [project, ...mockState.projects];
+    return { success: true, projectId: project.id };
   }
   if (action === "adminCreateEvent") {
     const event = { id: Date.now(), ...data.event, community_id: data.event?.communityId || data.event?.community_id || null };

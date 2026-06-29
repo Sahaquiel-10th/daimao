@@ -1272,6 +1272,29 @@ function eventPayload(input, userId) {
   };
 }
 
+function projectPayload(input, userId) {
+  const name = text(input.name, 160);
+  if (!name) throw codedError("VALIDATION_ERROR", "项目名称不能为空");
+  const creatorUserId = input.creatorUserId || input.creator_user_id ? id(input.creatorUserId || input.creator_user_id) : userId;
+  const communityId = input.communityId !== undefined ? input.communityId : input.community_id;
+  return {
+    name,
+    description: text(input.description, 10000),
+    project_type: text(input.projectType || input.project_type, 60) || "official",
+    tags_json: json(parseTags(input.tagsText || input.tags), []),
+    ideal_participant: text(input.idealParticipant || input.ideal_participant, 5000),
+    not_fit_participant: text(input.notFitParticipant || input.not_fit_participant, 5000),
+    stage: text(input.stage, 80),
+    goal: text(input.goal, 5000),
+    creator_user_id: creatorUserId,
+    community_id: communityId ? id(communityId) : null,
+    visibility: input.visibility === "public" ? "public" : "private",
+    status: ["draft", "active", "paused", "completed", "archived"].includes(input.status) ? input.status : "draft",
+    official_sort_weight: Number(input.officialSortWeight || input.official_sort_weight || 0),
+    is_official_recommended: input.isOfficialRecommended || input.is_official_recommended ? 1 : 0,
+  };
+}
+
 function sqlDateTime(value) {
   const raw = text(value, 40);
   if (!raw) return null;
@@ -2479,9 +2502,10 @@ async function getRecommendations(event, user) {
 async function adminList(event, user) {
   await requireAdmin(user);
   if (useRdb()) {
-    const [users, projects, events, registrations, records, files, jobs, memories, evidence, requests, logs, ragSources, ragChunks, ragJobs] = await Promise.all([
+    const [users, projects, applications, events, registrations, records, files, jobs, memories, evidence, requests, logs, adminLogs, ragSources, ragChunks, ragJobs] = await Promise.all([
       rdbSelect("users", "id,openid,display_name,avatar_url,status,is_admin,experience_points,created_at,updated_at", (request) => request.order("created_at", { ascending: false }).limit(100)),
       rdbSelect("projects", "*", (request) => request.order("updated_at", { ascending: false }).limit(100)),
+      rdbSelect("project_applications", "*", (request) => request.order("created_at", { ascending: false }).limit(200)).catch(() => []),
       rdbSelect("official_events", "*", (request) => request.order("start_time", { ascending: false }).limit(100)),
       rdbSelect("event_registrations", "*", (request) => request.order("created_at", { ascending: false }).limit(100)),
       rdbSelect("project_records", "id,project_id,uploader_user_id,title,record_type,visibility,ai_process_status,created_at", (request) => request.order("created_at", { ascending: false }).limit(100)).catch(() => []),
@@ -2491,6 +2515,7 @@ async function adminList(event, user) {
       rdbSelect("evidence_records", "*", (request) => request.order("created_at", { ascending: false }).limit(100)).catch(() => []),
       rdbSelect("meeting_requests", "*", (request) => request.order("created_at", { ascending: false }).limit(100)).catch(() => []),
       rdbSelect("notification_logs", "*", (request) => request.order("created_at", { ascending: false }).limit(100)).catch(() => []),
+      rdbSelect("admin_logs", "*", (request) => request.order("created_at", { ascending: false }).limit(200)).catch(() => []),
       rdbSelect("rag_sources", "*", (request) => request.order("updated_at", { ascending: false }).limit(100)),
       rdbSelect("rag_chunks", "id,source_id,chunk_index,content_summary,vector_doc_id,evidence_polarity,confidence,status,updated_at", (request) => request.order("updated_at", { ascending: false }).limit(100)),
       rdbSelect("rag_index_jobs", "*", (request) => request.order("created_at", { ascending: false }).limit(100))
@@ -2498,6 +2523,7 @@ async function adminList(event, user) {
     return {
       users,
       projects: projects.map((item) => ({ ...item, tags: parseJson(item.tags_json, []) })),
+      projectApplications: applications,
       events,
       eventRegistrations: registrations,
       projectRecords: records,
@@ -2507,14 +2533,16 @@ async function adminList(event, user) {
       evidence,
       meetingRequests: requests,
       notificationLogs: logs,
+      adminLogs,
       ragSources,
       ragChunks,
       ragIndexJobs: ragJobs
     };
   }
-  const [users, projects, events, registrations, records, files, jobs, memories, evidence, requests, logs, ragSources, ragChunks, ragJobs] = await Promise.all([
+  const [users, projects, applications, events, registrations, records, files, jobs, memories, evidence, requests, logs, adminLogs, ragSources, ragChunks, ragJobs] = await Promise.all([
     query("SELECT id,display_name,status,is_admin,created_at,updated_at FROM users ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 100"),
+    query("SELECT * FROM project_applications ORDER BY created_at DESC LIMIT 200"),
     query("SELECT * FROM official_events ORDER BY start_time DESC LIMIT 100"),
     query("SELECT * FROM event_registrations ORDER BY created_at DESC LIMIT 100"),
     query("SELECT id,project_id,uploader_user_id,title,record_type,visibility,ai_process_status,created_at FROM project_records ORDER BY created_at DESC LIMIT 100"),
@@ -2524,6 +2552,7 @@ async function adminList(event, user) {
     query("SELECT * FROM evidence_records ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM meeting_requests ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM notification_logs ORDER BY created_at DESC LIMIT 100"),
+    query("SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT 200"),
     query("SELECT * FROM rag_sources ORDER BY updated_at DESC LIMIT 100"),
     query("SELECT id,source_id,chunk_index,content_summary,vector_doc_id,evidence_polarity,confidence,status,updated_at FROM rag_chunks ORDER BY updated_at DESC LIMIT 100"),
     query("SELECT * FROM rag_index_jobs ORDER BY created_at DESC LIMIT 100")
@@ -2531,6 +2560,7 @@ async function adminList(event, user) {
   return {
     users,
     projects,
+    projectApplications: applications,
     events,
     eventRegistrations: registrations,
     projectRecords: records,
@@ -2540,10 +2570,65 @@ async function adminList(event, user) {
     evidence,
     meetingRequests: requests,
     notificationLogs: logs,
+    adminLogs,
     ragSources,
     ragChunks,
     ragIndexJobs: ragJobs
   };
+}
+
+async function adminCreateProject(event, user) {
+  await requireAdmin(user);
+  const item = event.project || event.patch || {};
+  const values = projectPayload(item, user.id);
+  if (useRdb()) {
+    await rdbInsert("projects", values);
+    const rows = await rdbSelect("projects", "id", (request) =>
+      request.eq("name", values.name).eq("creator_user_id", values.creator_user_id).order("created_at", { ascending: false }).limit(1)
+    );
+    const projectId = rows[0] ? Number(rows[0].id) : null;
+    if (projectId) {
+      await rdbUpsert("project_members", {
+        project_id: projectId,
+        user_id: values.creator_user_id,
+        role: "creator",
+        status: "active",
+        invited_by: user.id,
+        joined_at: new Date().toISOString().slice(0, 19).replace("T", " "),
+      });
+    }
+    await adminLog(user, "create_project", "project", projectId, item);
+    return { projectId };
+  }
+  const result = await query(
+    `INSERT INTO projects
+     (name,description,project_type,tags_json,ideal_participant,not_fit_participant,stage,goal,creator_user_id,community_id,visibility,status,official_sort_weight,is_official_recommended)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [
+      values.name,
+      values.description,
+      values.project_type,
+      values.tags_json,
+      values.ideal_participant,
+      values.not_fit_participant,
+      values.stage,
+      values.goal,
+      values.creator_user_id,
+      values.community_id,
+      values.visibility,
+      values.status,
+      values.official_sort_weight,
+      values.is_official_recommended,
+    ]
+  );
+  await query(
+    `INSERT INTO project_members (project_id,user_id,role,status,invited_by,joined_at)
+     VALUES (?,?,?,?,?,NOW())
+     ON DUPLICATE KEY UPDATE role=VALUES(role),status=VALUES(status),invited_by=VALUES(invited_by),joined_at=VALUES(joined_at)`,
+    [result.insertId, values.creator_user_id, "creator", "active", user.id]
+  );
+  await adminLog(user, "create_project", "project", result.insertId, item);
+  return { projectId: result.insertId };
 }
 
 async function adminReviewCandidate(event, user) {
@@ -3103,6 +3188,7 @@ async function adminUpdateProject(event, user) {
   };
   if (patch.name !== undefined) values.name = text(patch.name, 160);
   if (patch.description !== undefined) values.description = text(patch.description, 10000);
+  if (patch.creatorUserId !== undefined || patch.creator_user_id !== undefined) values.creator_user_id = id(patch.creatorUserId || patch.creator_user_id);
   if (patch.stage !== undefined) values.stage = text(patch.stage, 80);
   if (patch.goal !== undefined) values.goal = text(patch.goal, 5000);
   if (patch.tags !== undefined || patch.tagsText !== undefined) values.tags_json = json(parseTags(patch.tagsText || patch.tags), []);
@@ -3112,6 +3198,16 @@ async function adminUpdateProject(event, user) {
   }
   if (useRdb()) {
     await rdbUpdate("projects", values, (request) => request.eq("id", projectId));
+    if (values.creator_user_id) {
+      await rdbUpsert("project_members", {
+        project_id: projectId,
+        user_id: values.creator_user_id,
+        role: "creator",
+        status: "active",
+        invited_by: user.id,
+        joined_at: new Date().toISOString().slice(0, 19).replace("T", " "),
+      });
+    }
     await adminLog(user, "update_project", "project", projectId, patch);
     return { saved: true };
   }
@@ -4776,6 +4872,7 @@ const actions = {
   adminSetUserStatus,
   adminSetUserAdmin,
   adminListProjects,
+  adminCreateProject,
   adminUpdateProject,
   adminListEvents,
   adminCreateEvent,

@@ -380,8 +380,17 @@ async function assertScopedBusinessAction(data) {
     await assertEvidenceInSessionCommunities(data, data.evidenceId || data.id);
     return;
   }
+  if (action === "adminCreateProject") {
+    const project = data.project || data.patch || {};
+    const communityId = project.communityId !== undefined ? project.communityId : project.community_id;
+    const creatorUserId = project.creatorUserId !== undefined ? project.creatorUserId : project.creator_user_id;
+    requireCommunityAccess(data, communityId);
+    if (creatorUserId) await assertUserInSessionCommunities(data, creatorUserId);
+    return;
+  }
   if (action === "adminUpdateProject") {
     const patchCommunityId = data.patch && (data.patch.communityId !== undefined ? data.patch.communityId : data.patch.community_id);
+    const patchCreatorUserId = data.patch && (data.patch.creatorUserId !== undefined ? data.patch.creatorUserId : data.patch.creator_user_id);
     const rows = await rdbSelect("projects", "id,community_id", (request) => request.eq("id", id(data.projectId, "projectId")).limit(1)).catch(() => []);
     const project = rows[0];
     if (!project) {
@@ -391,6 +400,7 @@ async function assertScopedBusinessAction(data) {
     }
     requireCommunityAccess(data, project.community_id);
     if (patchCommunityId !== undefined) requireCommunityAccess(data, patchCommunityId);
+    if (patchCreatorUserId) await assertUserInSessionCommunities(data, patchCreatorUserId);
     return;
   }
   if (action === "adminCreateEvent") {
@@ -538,6 +548,8 @@ function applyAdminScope(payload, session) {
   const allowedSourceIds = new Set(ragSources.map((item) => Number(item.id)));
   const ragIndexJobs = (payload.ragIndexJobs || []).filter((item) => allowedSourceIds.has(Number(item.source_id)));
   const projects = (payload.projects || []).filter((item) => allowed.has(Number(item.community_id)));
+  const allowedProjectIds = new Set(projects.map((item) => Number(item.id)));
+  const projectApplications = (payload.projectApplications || []).filter((item) => allowedProjectIds.has(Number(item.project_id)));
   const events = (payload.events || []).filter((item) => allowed.has(Number(item.community_id)));
   return {
     ...payload,
@@ -546,10 +558,12 @@ function applyAdminScope(payload, session) {
     communityMemberships,
     users,
     projects,
+    projectApplications,
     events,
     evidence,
     ragSources,
     ragIndexJobs,
+    adminLogs: [],
   };
 }
 
@@ -799,6 +813,9 @@ async function adminDeleteAdminAccount(data) {
 
 async function saveCoverAfterBusiness(data, result) {
   if (!result || !result.success) return result;
+  if (data.action === "adminCreateProject" && data.project && data.project.coverUrl !== undefined && result.projectId) {
+    await rdbUpdate("projects", { cover_url: text(data.project.coverUrl, 1000) }, (request) => request.eq("id", id(result.projectId, "projectId")));
+  }
   if (data.action === "adminUpdateProject" && data.patch && data.patch.coverUrl !== undefined) {
     await rdbUpdate("projects", { cover_url: text(data.patch.coverUrl, 1000) }, (request) => request.eq("id", id(data.projectId, "projectId")));
   }

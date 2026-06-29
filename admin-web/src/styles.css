@@ -836,6 +836,13 @@ th {
   background: #fffdfa;
 }
 
+.muted-cell {
+  max-width: 360px;
+  color: var(--muted);
+  line-height: 1.5;
+  white-space: normal;
+}
+
 @media (max-width: 1080px) {
   .app-shell,
   .split-view,

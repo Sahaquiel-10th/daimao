@@ -27,7 +27,9 @@ const tabs = [
   { key: "communities", label: "社区", icon: Building2 },
   { key: "projects", label: "项目", icon: Database },
   { key: "events", label: "活动", icon: CalendarDays },
+  { key: "pending", label: "待处理", icon: CheckCircle2 },
   { key: "rag", label: "RAG", icon: Search },
+  { key: "logs", label: "日志", icon: FileText, superOnly: true },
 ];
 
 const emptyEvent = {
@@ -44,6 +46,24 @@ const emptyEvent = {
   coverUrl: "",
   communityId: "",
 };
+
+function emptyProjectDraft(defaultCommunityId = "") {
+  return {
+    id: null,
+    name: "",
+    description: "",
+    stage: "筹备中",
+    status: "draft",
+    visibility: "private",
+    goal: "",
+    tagsText: "",
+    creatorUserId: "",
+    communityId: defaultCommunityId || "",
+    is_official_recommended: 0,
+    official_sort_weight: officialWeightFromOrder(3),
+    coverUrl: "",
+  };
+}
 
 function formatDate(value) {
   if (!value) return "-";
@@ -87,6 +107,54 @@ function communityName(communities, communityId) {
   if (!communityId) return "平台官方";
   const community = (communities || []).find((item) => Number(item.id) === Number(communityId));
   return community?.name || `社区 #${communityId}`;
+}
+
+function userName(users, userId) {
+  if (!userId) return "-";
+  const user = (users || []).find((item) => Number(item.id) === Number(userId));
+  return user?.profile?.name || user?.display_name || `用户 #${userId}`;
+}
+
+function buildPendingItems(data) {
+  if (!data) return [];
+  const items = [];
+  (data.projectApplications || [])
+    .filter((item) => ["pending_secretary_review", "pending_owner_review"].includes(item.status) || item.ai_review_status === "pending")
+    .forEach((item) => {
+      items.push({
+        id: `application-${item.id}`,
+        type: "项目申请",
+        title: `项目 #${item.project_id} · ${userName(data.users, item.user_id)}`,
+        status: item.status,
+        hint: item.ai_review_summary || item.message || "等待审核",
+        created_at: item.created_at,
+      });
+    });
+  (data.ragIndexJobs || [])
+    .filter((item) => ["pending", "processing", "failed"].includes(item.status))
+    .forEach((item) => {
+      items.push({
+        id: `rag-${item.id}`,
+        type: "RAG 索引",
+        title: `Source #${item.source_id}`,
+        status: item.status,
+        hint: item.error_message || item.job_type || "等待索引",
+        created_at: item.created_at,
+      });
+    });
+  (data.evidence || [])
+    .filter((item) => item.status === "candidate")
+    .forEach((item) => {
+      items.push({
+        id: `evidence-${item.id}`,
+        type: "候选证据",
+        title: `${userName(data.users, item.user_id)} · ${statusLabel(item.evidence_type)}`,
+        status: item.status,
+        hint: item.content,
+        created_at: item.created_at,
+      });
+    });
+  return items.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()).slice(0, 80);
 }
 
 function Badge({ children, tone = "default" }) {
@@ -305,6 +373,7 @@ export default function App() {
     if (!selectedUser) return [];
     return userEvidence;
   }, [selectedUser, userEvidence]);
+  const pendingItems = useMemo(() => buildPendingItems(data), [data]);
   const adminSession = data?.adminSession || null;
   const isSuperAdmin = adminSession?.role !== "community_admin";
   const visibleTabs = useMemo(() => tabs.filter((tab) => !tab.superOnly || isSuperAdmin), [isSuperAdmin]);
@@ -429,6 +498,11 @@ export default function App() {
   function createCommunity() {
     setSelectedCommunity(null);
     setCommunityDraft(emptyCommunityDraft());
+  }
+
+  function createProjectDraft() {
+    const defaultCommunityId = !isSuperAdmin && (data?.communities || []).length === 1 ? data.communities[0].id : "";
+    setProjectDraft(emptyProjectDraft(defaultCommunityId));
   }
 
   if (!authed) {
@@ -557,6 +631,7 @@ export default function App() {
                     .slice(0, 5)}
                   onEdit={setProjectDraft}
                   communities={data?.communities || []}
+                  users={data?.users || []}
                 />
             </section>
           </section>
@@ -750,16 +825,28 @@ export default function App() {
         {activeTab === "projects" && (
           <section className="split-view">
             <section className="panel dm-card">
-              <h3>项目管理</h3>
-              <ProjectTable projects={filteredProjects} onEdit={setProjectDraft} communities={data?.communities || []} />
+              <div className="panel-title-row">
+                <h3>项目管理</h3>
+                <button type="button" onClick={createProjectDraft}>新建项目</button>
+              </div>
+              <ProjectTable projects={filteredProjects} onEdit={setProjectDraft} communities={data?.communities || []} users={data?.users || []} />
             </section>
             <ProjectEditor
               draft={projectDraft}
               onChange={setProjectDraft}
               communities={data?.communities || []}
+              users={data?.users || []}
               isSuperAdmin={isSuperAdmin}
               onUpload={(file) => upload("project-cover", file, (fileID) => setProjectDraft((draft) => ({ ...draft, cover_url: fileID })))}
-              onSubmit={() => projectDraft && run("adminUpdateProject", { projectId: projectDraft.id, patch: toProjectPatch(projectDraft) }, "项目已保存")}
+              onSubmit={() => {
+                if (!projectDraft) return;
+                const payload = toProjectPatch(projectDraft);
+                if (!payload.communityId && !isSuperAdmin && (data?.communities || []).length === 1) {
+                  payload.communityId = data.communities[0].id;
+                }
+                if (projectDraft.id) run("adminUpdateProject", { projectId: projectDraft.id, patch: payload }, "项目已保存");
+                else run("adminCreateProject", { project: payload }, "项目已创建");
+              }}
             />
           </section>
         )}
@@ -786,6 +873,15 @@ export default function App() {
               }}
               onNew={() => setEventDraft(emptyEvent)}
             />
+          </section>
+        )}
+
+        {activeTab === "pending" && (
+          <section className="content-grid">
+            <section className="panel dm-card">
+              <h3>待处理中心</h3>
+              <PendingTable items={pendingItems} />
+            </section>
           </section>
         )}
 
@@ -817,6 +913,15 @@ export default function App() {
                   ["created_at", "创建时间", formatDate],
                 ]}
               />
+            </section>
+          </section>
+        )}
+
+        {activeTab === "logs" && (
+          <section className="content-grid">
+            <section className="panel dm-card">
+              <h3>后台操作日志</h3>
+              <AdminLogTable logs={data?.adminLogs || []} users={data?.users || []} />
             </section>
           </section>
         )}
@@ -1363,7 +1468,7 @@ function CommunityEvidenceEditor({ draft, onChange, onFile, onSubmit }) {
   );
 }
 
-function ProjectTable({ projects, onEdit, communities = [] }) {
+function ProjectTable({ projects, onEdit, communities = [], users = [] }) {
   return (
     <table>
       <thead>
@@ -1371,6 +1476,7 @@ function ProjectTable({ projects, onEdit, communities = [] }) {
           <th>ID</th>
           <th>项目</th>
           <th>社区</th>
+          <th>主理人</th>
           <th>状态</th>
           <th>可见性</th>
           <th>官方顺序</th>
@@ -1390,6 +1496,7 @@ function ProjectTable({ projects, onEdit, communities = [] }) {
               </div>
             </td>
             <td>{communityName(communities, project.community_id)}</td>
+            <td>{userName(users, project.creator_user_id)}</td>
             <td><Badge tone={project.status === "active" ? "green" : "default"}>{statusLabel(project.status)}</Badge></td>
             <td>{project.visibility}</td>
             <td>{project.is_official_recommended ? <Badge tone="yellow">#{officialDisplayOrder(project.official_sort_weight)}</Badge> : "-"}</td>
@@ -1398,7 +1505,7 @@ function ProjectTable({ projects, onEdit, communities = [] }) {
             <td><button onClick={() => onEdit(project)}>编辑</button></td>
           </tr>
         )) : (
-          <tr><td colSpan="9"><EmptyState title="暂无项目">发布或同步项目后会显示在这里。</EmptyState></td></tr>
+          <tr><td colSpan="10"><EmptyState title="暂无项目">发布或同步项目后会显示在这里。</EmptyState></td></tr>
         )}
       </tbody>
     </table>
@@ -1414,7 +1521,7 @@ function UploadButton({ onUpload }) {
   );
 }
 
-function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], isSuperAdmin = false }) {
+function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], users = [], isSuperAdmin = false }) {
   if (!draft) {
     return (
       <aside className="panel editor-panel dm-card">
@@ -1438,6 +1545,14 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], 
           ))}
         </select>
       </Field>
+      <Field label="项目主理人">
+        <select value={draft.creator_user_id || draft.creatorUserId || ""} onChange={(event) => onChange({ ...draft, creator_user_id: event.target.value })}>
+          <option value="">请选择主理人</option>
+          {users.map((user) => (
+            <option key={user.id} value={user.id}>{user.profile?.name || user.display_name || user.openid || user.id}</option>
+          ))}
+        </select>
+      </Field>
       <Field label="封面 URL / cloud fileID">
         {assetSrc(draft.cover_display_url, draft.cover_url || draft.coverUrl) && <img className="cover-preview" src={assetSrc(draft.cover_display_url, draft.cover_url || draft.coverUrl)} alt="" />}
         <div className="asset-row">
@@ -1447,6 +1562,9 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], 
       </Field>
       <Field label="阶段">
         <input value={draft.stage || ""} onChange={(event) => onChange({ ...draft, stage: event.target.value })} />
+      </Field>
+      <Field label="标签">
+        <input value={draft.tagsText || (draft.tags || []).join(" ")} onChange={(event) => onChange({ ...draft, tagsText: event.target.value })} placeholder="AI 销售 SaaS" />
       </Field>
       <Field label="状态">
         <select value={draft.status || "draft"} onChange={(event) => onChange({ ...draft, status: event.target.value })}>
@@ -1482,6 +1600,9 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], 
       </Field>
       <Field label="目标">
         <textarea value={draft.goal || ""} onChange={(event) => onChange({ ...draft, goal: event.target.value })} />
+      </Field>
+      <Field label="项目说明">
+        <textarea value={draft.description || ""} onChange={(event) => onChange({ ...draft, description: event.target.value })} />
       </Field>
       <button className="primary-button" onClick={onSubmit}>保存项目</button>
     </aside>
@@ -1594,6 +1715,66 @@ function EventEditor({ draft, onChange, onSubmit, onNew, onUpload, communities =
   );
 }
 
+function PendingTable({ items }) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>类型</th>
+          <th>对象</th>
+          <th>状态</th>
+          <th>说明</th>
+          <th>时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.length ? items.map((item) => (
+          <tr key={item.id}>
+            <td>{item.type}</td>
+            <td>{item.title}</td>
+            <td><Badge tone={item.status === "failed" ? "red" : "yellow"}>{statusLabel(item.status)}</Badge></td>
+            <td className="muted-cell">{String(item.hint || "-").slice(0, 120)}</td>
+            <td>{formatDate(item.created_at)}</td>
+          </tr>
+        )) : (
+          <tr><td colSpan="5"><EmptyState title="暂无待处理事项">没有待审核申请、候选证据或待索引任务。</EmptyState></td></tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function AdminLogTable({ logs, users }) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>管理员</th>
+          <th>动作</th>
+          <th>对象</th>
+          <th>详情</th>
+          <th>时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {logs.length ? logs.map((log) => (
+          <tr key={log.id}>
+            <td>{log.id}</td>
+            <td>{userName(users, log.admin_user_id)}</td>
+            <td>{log.action}</td>
+            <td>{log.target_type} #{log.target_id || "-"}</td>
+            <td className="muted-cell">{JSON.stringify(log.detail_json || {}).slice(0, 160)}</td>
+            <td>{formatDate(log.created_at)}</td>
+          </tr>
+        )) : (
+          <tr><td colSpan="6"><EmptyState title="暂无操作日志">后台操作后会记录在这里。</EmptyState></td></tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
 function SimpleTable({ rows, columns }) {
   return (
     <table>
@@ -1652,12 +1833,15 @@ function toEventPayload(draft) {
 function toProjectPatch(draft) {
   return {
     name: draft.name,
+    description: draft.description || "",
     stage: draft.stage,
     status: draft.status,
     visibility: draft.visibility,
     isOfficialRecommended: !!draft.is_official_recommended,
     officialSortWeight: Number(draft.official_sort_weight || officialWeightFromOrder(1)),
     goal: draft.goal,
+    tagsText: draft.tagsText || (draft.tags || []).join(" "),
+    creatorUserId: draft.creator_user_id || draft.creatorUserId || null,
     coverUrl: draft.cover_url || draft.coverUrl || "",
     communityId: draft.community_id || draft.communityId || null,
   };
