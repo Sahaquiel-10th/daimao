@@ -42,6 +42,7 @@ const emptyEvent = {
   officialSortWeight: 0,
   capacity: "",
   coverUrl: "",
+  communityId: "",
 };
 
 function formatDate(value) {
@@ -82,6 +83,12 @@ function statusLabel(value) {
   return labels[value] || value || "-";
 }
 
+function communityName(communities, communityId) {
+  if (!communityId) return "平台官方";
+  const community = (communities || []).find((item) => Number(item.id) === Number(communityId));
+  return community?.name || `社区 #${communityId}`;
+}
+
 function Badge({ children, tone = "default" }) {
   return <span className={`badge badge-${tone}`}>{children}</span>;
 }
@@ -95,8 +102,29 @@ function Field({ label, children }) {
   );
 }
 
+function EmptyState({ title = "暂无数据", children }) {
+  return (
+    <div className="empty-state">
+      <strong>{title}</strong>
+      {children && <span>{children}</span>}
+    </div>
+  );
+}
+
 function firstText(value, fallback = "猫") {
   return String(value || fallback).trim().slice(0, 1);
+}
+
+function assetSrc(primary, fallback) {
+  if (primary) return primary;
+  if (typeof fallback === "string" && !fallback.startsWith("cloud://")) return fallback;
+  return "";
+}
+
+function isSessionError(err) {
+  const code = err && err.code;
+  const message = String((err && err.message) || "");
+  return ["LOGIN_FAILED", "LOGIN_NOT_CONFIGURED", "FORBIDDEN", "UNAUTHORIZED"].includes(code) || /请先登录后台|登录失败|会话|session/i.test(message);
 }
 
 function officialDisplayOrder(weight) {
@@ -194,10 +222,19 @@ export default function App() {
   const [projectDraft, setProjectDraft] = useState(null);
   const [eventDraft, setEventDraft] = useState(emptyEvent);
   const [toast, setToast] = useState(null);
+  const [errorNeedsLogin, setErrorNeedsLogin] = useState(false);
+
+  function showError(err, fallback = "操作失败") {
+    const message = (err && err.message) || fallback;
+    setError(message);
+    setErrorNeedsLogin(isSessionError(err));
+    setToast({ type: "error", message });
+  }
 
   async function refresh() {
     setLoading(true);
     setError("");
+    setErrorNeedsLogin(false);
     try {
       const payload = await callAdmin("adminList");
       setData(payload);
@@ -217,7 +254,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      setError(err.message || "加载失败");
+      showError(err, "加载失败");
     } finally {
       setLoading(false);
     }
@@ -291,14 +328,14 @@ export default function App() {
   async function run(action, payload, successMessage = "操作已完成") {
     setLoading(true);
     setError("");
+    setErrorNeedsLogin(false);
     try {
       await callAdmin(action, payload);
       await refresh();
       setToast({ type: "success", message: successMessage });
       return true;
     } catch (err) {
-      setError(err.message || "操作失败");
-      setToast({ type: "error", message: err.message || "操作失败" });
+      showError(err, "操作失败");
       setLoading(false);
       return false;
     }
@@ -308,6 +345,7 @@ export default function App() {
     if (!evidenceDraft) return false;
     setLoading(true);
     setError("");
+    setErrorNeedsLogin(false);
     try {
       await callAdmin("adminCreateCommunityMemberEvidence", {
         userId: evidenceDraft.userId,
@@ -326,8 +364,7 @@ export default function App() {
       });
       return true;
     } catch (err) {
-      setError(err.message || "证据保存失败");
-      setToast({ type: "error", message: err.message || "证据保存失败" });
+      showError(err, "证据保存失败");
       return false;
     } finally {
       setLoading(false);
@@ -337,13 +374,13 @@ export default function App() {
   async function upload(kind, file, apply) {
     setLoading(true);
     setError("");
+    setErrorNeedsLogin(false);
     try {
       const result = await uploadAsset(kind, file);
       apply(result.fileID);
       setToast({ type: "success", message: "图片已上传，记得保存当前表单" });
     } catch (err) {
-      setError(err.message || "上传失败");
-      setToast({ type: "error", message: err.message || "上传失败" });
+      showError(err, "上传失败");
     } finally {
       setLoading(false);
     }
@@ -353,12 +390,14 @@ export default function App() {
     event.preventDefault();
     setLoading(true);
     setError("");
+    setErrorNeedsLogin(false);
     try {
       await loginAdmin(usernameInput.trim(), passwordInput);
       saveAccessKey("");
       setAuthed(true);
     } catch (err) {
       setError(err.message || "登录失败");
+      setErrorNeedsLogin(false);
     } finally {
       setLoading(false);
     }
@@ -371,6 +410,7 @@ export default function App() {
     setAuthed(false);
     setData(null);
     setError("");
+    setErrorNeedsLogin(false);
   }
 
   function selectUser(user) {
@@ -475,9 +515,11 @@ export default function App() {
         {error && (
           <div className="notice">
             <pre>{error}</pre>
-            <button type="button" onClick={resetCredentials}>
-              重新配置
-            </button>
+            {errorNeedsLogin && (
+              <button type="button" onClick={resetCredentials}>
+                重新登录
+              </button>
+            )}
           </div>
         )}
         {toast && (
@@ -514,6 +556,7 @@ export default function App() {
                     .sort((a, b) => Number(b.official_sort_weight || 0) - Number(a.official_sort_weight || 0))
                     .slice(0, 5)}
                   onEdit={setProjectDraft}
+                  communities={data?.communities || []}
                 />
             </section>
           </section>
@@ -652,6 +695,10 @@ export default function App() {
                   draft={evidenceDraft}
                   onChange={setEvidenceDraft}
                   onFile={async (file) => {
+                    if (file.size > 5 * 1024 * 1024) {
+                      setToast({ type: "error", message: "证据文件不能超过 5MB；建议先提取关键文字再上传。" });
+                      return;
+                    }
                     const dataUrl = await readFileAsDataUrl(file);
                     setEvidenceDraft((draft) => ({
                       ...draft,
@@ -704,11 +751,13 @@ export default function App() {
           <section className="split-view">
             <section className="panel dm-card">
               <h3>项目管理</h3>
-              <ProjectTable projects={filteredProjects} onEdit={setProjectDraft} />
+              <ProjectTable projects={filteredProjects} onEdit={setProjectDraft} communities={data?.communities || []} />
             </section>
             <ProjectEditor
               draft={projectDraft}
               onChange={setProjectDraft}
+              communities={data?.communities || []}
+              isSuperAdmin={isSuperAdmin}
               onUpload={(file) => upload("project-cover", file, (fileID) => setProjectDraft((draft) => ({ ...draft, cover_url: fileID })))}
               onSubmit={() => projectDraft && run("adminUpdateProject", { projectId: projectDraft.id, patch: toProjectPatch(projectDraft) }, "项目已保存")}
             />
@@ -719,14 +768,19 @@ export default function App() {
           <section className="split-view">
             <section className="panel dm-card">
               <h3>活动管理</h3>
-              <EventTable events={filteredEvents} onEdit={(item) => setEventDraft(fromEventRow(item))} />
+              <EventTable events={filteredEvents} onEdit={(item) => setEventDraft(fromEventRow(item))} communities={data?.communities || []} />
             </section>
             <EventEditor
               draft={eventDraft}
               onChange={setEventDraft}
+              communities={data?.communities || []}
+              isSuperAdmin={isSuperAdmin}
               onUpload={(file) => upload("event-cover", file, (fileID) => setEventDraft((draft) => ({ ...draft, coverUrl: fileID })))}
               onSubmit={() => {
                 const payload = toEventPayload(eventDraft);
+                if (!payload.communityId && !isSuperAdmin && (data?.communities || []).length === 1) {
+                  payload.communityId = data.communities[0].id;
+                }
                 if (eventDraft.id) run("adminUpdateEvent", { eventId: eventDraft.id, event: payload }, "活动已保存");
                 else run("adminCreateEvent", { event: payload }, "活动已发布");
               }}
@@ -785,11 +839,11 @@ function UserTable({ users, onEdit }) {
         </tr>
       </thead>
       <tbody>
-        {users.map((user) => (
+        {users.length ? users.map((user) => (
           <tr key={user.id}>
             <td>
               <div className="user-cell">
-                {user.avatar_url ? <img className="avatar" src={user.avatar_url} alt="" /> : <span className="avatar text-avatar">{firstText(user.display_name)}</span>}
+                {assetSrc(user.avatar_display_url, user.avatar_url) ? <img className="avatar" src={assetSrc(user.avatar_display_url, user.avatar_url)} alt="" /> : <span className="avatar text-avatar">{firstText(user.display_name)}</span>}
                 <div className="title-stack">
                   <strong>{user.display_name || user.profile?.name || "-"}</strong>
                   <span>{user.profile?.job || user.openid}</span>
@@ -808,7 +862,9 @@ function UserTable({ users, onEdit }) {
             <td>{user.is_admin ? <Badge tone="blue">管理员</Badge> : <Badge>用户</Badge>}</td>
             <td><button onClick={() => onEdit(user)}>编辑</button></td>
           </tr>
-        ))}
+        )) : (
+          <tr><td colSpan="6"><EmptyState title="暂无用户">换个关键词试试，或等待用户注册后再管理。</EmptyState></td></tr>
+        )}
       </tbody>
     </table>
   );
@@ -987,7 +1043,7 @@ function AdminAccountTable({ accounts, communities, onEdit }) {
         </tr>
       </thead>
       <tbody>
-        {(accounts || []).map((account) => (
+        {(accounts || []).length ? (accounts || []).map((account) => (
           <tr key={account.id}>
             <td>
               <div className="title-stack">
@@ -1007,7 +1063,9 @@ function AdminAccountTable({ accounts, communities, onEdit }) {
             <td>{formatDate(account.updated_at)}</td>
             <td><button type="button" onClick={() => onEdit({ ...account, password: "" })}>编辑</button></td>
           </tr>
-        ))}
+        )) : (
+          <tr><td colSpan="6"><EmptyState title="暂无管理员账号">先新建一个社区管理员，绑定可管理社区。</EmptyState></td></tr>
+        )}
       </tbody>
     </table>
   );
@@ -1024,7 +1082,13 @@ function AdminAccountEditor({ draft, communities, onChange, onSubmit, onDisable 
     onChange({ ...draft, communityIds: Array.from(next) });
   }
   return (
-    <aside className="panel editor-panel dm-card">
+    <form
+      className="panel editor-panel dm-card"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit();
+      }}
+    >
       <div className="editor-title">
         <h3>{draft.id ? "编辑管理员" : "新建管理员"}</h3>
         {draft.id && <button className="danger-button" type="button" onClick={onDisable}>停用</button>}
@@ -1063,10 +1127,10 @@ function AdminAccountEditor({ draft, communities, onChange, onSubmit, onDisable 
           </div>
         </section>
       )}
-      <button className="primary-button" type="button" onClick={onSubmit}>
+      <button className="primary-button" type="submit">
         {draft.id ? "保存管理员" : "创建管理员"}
       </button>
-    </aside>
+    </form>
   );
 }
 
@@ -1083,11 +1147,11 @@ function CommunityTable({ communities, onEdit }) {
         </tr>
       </thead>
       <tbody>
-        {communities.map((community) => (
+        {communities.length ? communities.map((community) => (
           <tr key={community.id}>
             <td>
               <div className="user-cell">
-                {community.logo_url ? <img className="avatar square-avatar" src={community.logo_url} alt="" /> : <span className="avatar square-avatar text-avatar">{firstText(community.name, "社")}</span>}
+                {assetSrc(community.logo_display_url, community.logo_url) ? <img className="avatar square-avatar" src={assetSrc(community.logo_display_url, community.logo_url)} alt="" /> : <span className="avatar square-avatar text-avatar">{firstText(community.name, "社")}</span>}
                 <div className="title-stack">
                   <strong>{community.name || "-"}</strong>
                   <span>{community.description || "社区资料"}</span>
@@ -1099,7 +1163,9 @@ function CommunityTable({ communities, onEdit }) {
             <td>{community.sort_weight || 0}</td>
             <td><button onClick={() => onEdit(community)}>编辑</button></td>
           </tr>
-        ))}
+        )) : (
+          <tr><td colSpan="5"><EmptyState title="暂无社区">点击「新建社区」创建第一个社区。</EmptyState></td></tr>
+        )}
       </tbody>
     </table>
   );
@@ -1244,7 +1310,7 @@ function CommunityMembers({ community, members, onCertify, onRevoke, onCreateEvi
           return (
             <div className="member-card" key={member.id}>
               <div className="user-cell">
-                {member.avatar_url ? <img className="avatar" src={member.avatar_url} alt="" /> : <span className="avatar text-avatar">{firstText(member.display_name || member.profile?.name)}</span>}
+                {assetSrc(member.avatar_display_url, member.avatar_url) ? <img className="avatar" src={assetSrc(member.avatar_display_url, member.avatar_url)} alt="" /> : <span className="avatar text-avatar">{firstText(member.display_name || member.profile?.name)}</span>}
                 <div className="title-stack">
                   <strong>{member.display_name || member.profile?.name || "-"}</strong>
                   <span>{member.profile?.job || member.openid}</span>
@@ -1297,13 +1363,14 @@ function CommunityEvidenceEditor({ draft, onChange, onFile, onSubmit }) {
   );
 }
 
-function ProjectTable({ projects, onEdit }) {
+function ProjectTable({ projects, onEdit, communities = [] }) {
   return (
     <table>
       <thead>
         <tr>
           <th>ID</th>
           <th>项目</th>
+          <th>社区</th>
           <th>状态</th>
           <th>可见性</th>
           <th>官方顺序</th>
@@ -1313,7 +1380,7 @@ function ProjectTable({ projects, onEdit }) {
         </tr>
       </thead>
       <tbody>
-        {projects.map((project) => (
+        {projects.length ? projects.map((project) => (
           <tr key={project.id}>
             <td>{project.id}</td>
             <td>
@@ -1322,6 +1389,7 @@ function ProjectTable({ projects, onEdit }) {
                 <span>{(project.tags || []).map((item) => `#${item}`).join(" ") || project.stage || "-"}</span>
               </div>
             </td>
+            <td>{communityName(communities, project.community_id)}</td>
             <td><Badge tone={project.status === "active" ? "green" : "default"}>{statusLabel(project.status)}</Badge></td>
             <td>{project.visibility}</td>
             <td>{project.is_official_recommended ? <Badge tone="yellow">#{officialDisplayOrder(project.official_sort_weight)}</Badge> : "-"}</td>
@@ -1329,7 +1397,9 @@ function ProjectTable({ projects, onEdit }) {
             <td>{formatDate(project.updated_at)}</td>
             <td><button onClick={() => onEdit(project)}>编辑</button></td>
           </tr>
-        ))}
+        )) : (
+          <tr><td colSpan="9"><EmptyState title="暂无项目">发布或同步项目后会显示在这里。</EmptyState></td></tr>
+        )}
       </tbody>
     </table>
   );
@@ -1344,7 +1414,7 @@ function UploadButton({ onUpload }) {
   );
 }
 
-function ProjectEditor({ draft, onChange, onSubmit, onUpload }) {
+function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], isSuperAdmin = false }) {
   if (!draft) {
     return (
       <aside className="panel editor-panel dm-card">
@@ -1359,7 +1429,17 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload }) {
       <Field label="项目名称">
         <input value={draft.name || ""} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
       </Field>
+      <Field label="归属社区">
+        <select value={draft.community_id || draft.communityId || ""} onChange={(event) => onChange({ ...draft, community_id: event.target.value })}>
+          {isSuperAdmin && <option value="">平台官方 / 不绑定社区</option>}
+          {!isSuperAdmin && <option value="">请选择社区</option>}
+          {communities.map((community) => (
+            <option key={community.id} value={community.id}>{community.name}</option>
+          ))}
+        </select>
+      </Field>
       <Field label="封面 URL / cloud fileID">
+        {assetSrc(draft.cover_display_url, draft.cover_url || draft.coverUrl) && <img className="cover-preview" src={assetSrc(draft.cover_display_url, draft.cover_url || draft.coverUrl)} alt="" />}
         <div className="asset-row">
           <input value={draft.cover_url || draft.coverUrl || ""} onChange={(event) => onChange({ ...draft, cover_url: event.target.value })} placeholder="cloud://..." />
           <UploadButton onUpload={onUpload} />
@@ -1408,13 +1488,14 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload }) {
   );
 }
 
-function EventTable({ events, onEdit }) {
+function EventTable({ events, onEdit, communities = [] }) {
   return (
     <table>
       <thead>
         <tr>
           <th>ID</th>
           <th>活动</th>
+          <th>社区</th>
           <th>时间</th>
           <th>地点</th>
           <th>状态</th>
@@ -1423,7 +1504,7 @@ function EventTable({ events, onEdit }) {
         </tr>
       </thead>
       <tbody>
-        {events.map((event) => (
+        {events.length ? events.map((event) => (
           <tr key={event.id}>
             <td>{event.id}</td>
             <td>
@@ -1432,19 +1513,22 @@ function EventTable({ events, onEdit }) {
                 <span>{event.event_type}</span>
               </div>
             </td>
+            <td>{communityName(communities, event.community_id)}</td>
             <td>{formatDate(event.start_time)}</td>
             <td>{event.location || "-"}</td>
             <td><Badge tone={event.status === "published" ? "green" : "default"}>{statusLabel(event.status)}</Badge></td>
             <td>{event.capacity || "-"}</td>
             <td><button onClick={() => onEdit(event)}>编辑</button></td>
           </tr>
-        ))}
+        )) : (
+          <tr><td colSpan="8"><EmptyState title="暂无活动">创建活动后会显示在这里。</EmptyState></td></tr>
+        )}
       </tbody>
     </table>
   );
 }
 
-function EventEditor({ draft, onChange, onSubmit, onNew, onUpload }) {
+function EventEditor({ draft, onChange, onSubmit, onNew, onUpload, communities = [], isSuperAdmin = false }) {
   return (
     <aside className="panel editor-panel dm-card">
       <div className="editor-title">
@@ -1454,7 +1538,17 @@ function EventEditor({ draft, onChange, onSubmit, onNew, onUpload }) {
       <Field label="标题">
         <input value={draft.title || ""} onChange={(event) => onChange({ ...draft, title: event.target.value })} />
       </Field>
+      <Field label="归属社区">
+        <select value={draft.communityId || draft.community_id || ""} onChange={(event) => onChange({ ...draft, communityId: event.target.value })}>
+          {isSuperAdmin && <option value="">平台官方 / 不绑定社区</option>}
+          {!isSuperAdmin && <option value="">请选择社区</option>}
+          {communities.map((community) => (
+            <option key={community.id} value={community.id}>{community.name}</option>
+          ))}
+        </select>
+      </Field>
       <Field label="封面 URL / cloud fileID">
+        {assetSrc(draft.coverDisplayUrl, draft.coverUrl) && <img className="cover-preview" src={assetSrc(draft.coverDisplayUrl, draft.coverUrl)} alt="" />}
         <div className="asset-row">
           <input value={draft.coverUrl || ""} onChange={(event) => onChange({ ...draft, coverUrl: event.target.value })} placeholder="cloud://..." />
           <UploadButton onUpload={onUpload} />
@@ -1507,11 +1601,13 @@ function SimpleTable({ rows, columns }) {
         <tr>{columns.map(([, label]) => <th key={label}>{label}</th>)}</tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
+        {rows.length ? rows.map((row) => (
           <tr key={row.id}>
             {columns.map(([key, label, format]) => <td key={label}>{format ? format(row[key]) : String(row[key] || "-")}</td>)}
           </tr>
-        ))}
+        )) : (
+          <tr><td colSpan={columns.length}><EmptyState title="暂无数据">这里还没有可展示的记录。</EmptyState></td></tr>
+        )}
       </tbody>
     </table>
   );
@@ -1531,6 +1627,8 @@ function fromEventRow(row) {
     officialSortWeight: row.official_sort_weight || 0,
     capacity: row.capacity || "",
     coverUrl: row.cover_url || "",
+    coverDisplayUrl: row.cover_display_url || "",
+    communityId: row.community_id || "",
   };
 }
 
@@ -1547,6 +1645,7 @@ function toEventPayload(draft) {
     officialSortWeight: Number(draft.officialSortWeight || 0),
     capacity: draft.capacity ? Number(draft.capacity) : null,
     coverUrl: draft.coverUrl || "",
+    communityId: draft.communityId || draft.community_id || null,
   };
 }
 
@@ -1560,5 +1659,6 @@ function toProjectPatch(draft) {
     officialSortWeight: Number(draft.official_sort_weight || officialWeightFromOrder(1)),
     goal: draft.goal,
     coverUrl: draft.cover_url || draft.coverUrl || "",
+    communityId: draft.community_id || draft.communityId || null,
   };
 }

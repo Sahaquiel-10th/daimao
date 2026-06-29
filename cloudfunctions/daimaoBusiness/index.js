@@ -1255,6 +1255,7 @@ async function adminLog(user, action, targetType, targetId, detail) {
 function eventPayload(input, userId) {
   const title = text(input.title, 180);
   if (!title || !input.startTime) throw codedError("VALIDATION_ERROR", "活动标题和开始时间不能为空");
+  const communityId = input.communityId !== undefined ? input.communityId : input.community_id;
   return {
     title,
     description: text(input.description, 10000),
@@ -1263,6 +1264,7 @@ function eventPayload(input, userId) {
     start_time: sqlDateTime(input.startTime),
     end_time: input.endTime ? sqlDateTime(input.endTime) : null,
     host_user_id: userId,
+    community_id: communityId ? id(communityId, "communityId") : null,
     status: ["draft", "published", "closed", "cancelled", "completed"].includes(input.status) ? input.status : "published",
     visibility: input.visibility === "private" ? "private" : "public",
     official_sort_weight: Number(input.officialSortWeight || 0),
@@ -3104,6 +3106,10 @@ async function adminUpdateProject(event, user) {
   if (patch.stage !== undefined) values.stage = text(patch.stage, 80);
   if (patch.goal !== undefined) values.goal = text(patch.goal, 5000);
   if (patch.tags !== undefined || patch.tagsText !== undefined) values.tags_json = json(parseTags(patch.tagsText || patch.tags), []);
+  if (patch.communityId !== undefined || patch.community_id !== undefined) {
+    const communityId = patch.communityId !== undefined ? patch.communityId : patch.community_id;
+    values.community_id = communityId ? id(communityId, "communityId") : null;
+  }
   if (useRdb()) {
     await rdbUpdate("projects", values, (request) => request.eq("id", projectId));
     await adminLog(user, "update_project", "project", projectId, patch);

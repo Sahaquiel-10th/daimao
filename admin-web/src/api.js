@@ -92,7 +92,15 @@ export async function loginAdmin(username, password) {
 }
 
 export async function callAdmin(action, data = {}) {
-  if (mockEnabled) return mockCall(action, data);
+  if (mockEnabled) {
+    const payload = await mockCall(action, data);
+    if (!payload || !payload.success) {
+      const error = new Error((payload && payload.message) || `Mock 未实现 ${action}`);
+      error.code = payload && payload.code;
+      throw error;
+    }
+    return payload;
+  }
   const adminSessionToken = getToken();
   if (!adminSessionToken) throw new Error("请先登录后台");
   if (apiMode !== "cloudbase") return callAdminProxy(action, { adminSessionToken, ...data });
@@ -120,23 +128,47 @@ export async function uploadAsset(kind, file) {
   if (!adminSessionToken) throw new Error("请先登录后台");
   if (!file) throw new Error("请选择图片");
   if (file.size > 8 * 1024 * 1024) throw new Error("图片不能超过 8MB");
+  const uploadFile = await prepareImageForUpload(file);
   const params = new URLSearchParams({
     kind,
-    filename: file.name || "upload",
+    filename: uploadFile.name || file.name || "upload",
   });
   const response = await fetch(`/api/upload?${params.toString()}`, {
     method: "POST",
     headers: {
-      "Content-Type": file.type || "application/octet-stream",
+      "Content-Type": uploadFile.type || file.type || "application/octet-stream",
       "X-Admin-Session-Token": adminSessionToken,
     },
-    body: file,
+    body: uploadFile,
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload || !payload.success) {
     throw new Error((payload && payload.message) || `上传失败 HTTP ${response.status}`);
   }
   return payload;
+}
+
+async function prepareImageForUpload(file) {
+  if (!file || !/^image\/(png|jpe?g|webp)$/.test(file.type || "")) return file;
+  if (file.size <= 900 * 1024) return file;
+  if (typeof document === "undefined" || typeof createImageBitmap !== "function") return file;
+
+  const bitmap = await createImageBitmap(file);
+  const maxSide = 1600;
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.drawImage(bitmap, 0, 0, width, height);
+  if (typeof bitmap.close === "function") bitmap.close();
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.82));
+  if (!blob || blob.size >= file.size) return file;
+  const baseName = String(file.name || "upload").replace(/\.[a-z0-9]+$/i, "");
+  return new File([blob], `${baseName}.webp`, { type: "image/webp" });
 }
 
 async function callAdminProxy(action, data = {}) {
@@ -201,16 +233,22 @@ function errorMessage(err) {
 const now = new Date().toISOString();
 const mockState = {
   users: [
-    { id: 1, openid: "demo_admin_daimao", display_name: "呆猫主理人", status: "active", is_admin: 1, experience_points: 180, created_at: now },
-    { id: 2, openid: "demo_operator_ai", display_name: "阿里 AI 产品顾问", status: "active", is_admin: 0, experience_points: 76, created_at: now },
+    { id: 1, openid: "demo_admin_daimao", display_name: "呆猫主理人", status: "active", is_admin: 1, experience_points: 180, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["主理人"], communityName: "OPC 共创营", badgeName: "OPC" }] },
+    { id: 2, openid: "demo_operator_ai", display_name: "阿里 AI 产品顾问", status: "active", is_admin: 0, experience_points: 76, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["AI"], communityName: "OPC 共创营", badgeName: "OPC" }] },
     { id: 3, openid: "demo_sales_growth", display_name: "增长销售合伙人", status: "disabled", is_admin: 0, experience_points: 63, created_at: now },
   ],
+  communities: [
+    { id: 1, name: "OPC 共创营", badge_name: "OPC", description: "务实接单、项目共创", logo_url: "", certification_method: "manual_review", status: "active", sort_weight: 100 },
+  ],
+  adminAccounts: [
+    { id: 1, username: "community_demo", display_name: "OPC 社区管理员", role: "community_admin", status: "active", communityIds: [1], updated_at: now },
+  ],
   projects: [
-    { id: 10, name: "AI 销售线索整理小助手", status: "active", visibility: "public", is_official_recommended: 1, official_sort_weight: 100, star_count: 42, stage: "招募共创", tags: ["AI", "销售"], updated_at: now },
-    { id: 11, name: "城市私董会活动运营系统", status: "draft", visibility: "private", is_official_recommended: 0, official_sort_weight: 20, star_count: 8, stage: "内测", tags: ["社区", "活动"], updated_at: now },
+    { id: 10, community_id: 1, name: "AI 销售线索整理小助手", status: "active", visibility: "public", is_official_recommended: 1, official_sort_weight: 100, star_count: 42, stage: "招募共创", tags: ["AI", "销售"], updated_at: now },
+    { id: 11, community_id: 1, name: "城市私董会活动运营系统", status: "draft", visibility: "private", is_official_recommended: 0, official_sort_weight: 20, star_count: 8, stage: "内测", tags: ["社区", "活动"], updated_at: now },
   ],
   events: [
-    { id: 20, title: "OPC 项目评审会", event_type: "project_review", location: "上海", status: "published", visibility: "public", start_time: now, capacity: 20 },
+    { id: 20, community_id: 1, title: "OPC 项目评审会", event_type: "project_review", location: "上海", status: "published", visibility: "public", start_time: now, capacity: 20 },
   ],
   ragSources: [
     { id: 30, source_type: "profile", title: "阿里 AI 产品顾问资料", status: "indexed", visibility: "match_only", updated_at: now },
@@ -222,7 +260,60 @@ const mockState = {
 
 async function mockCall(action, data) {
   await new Promise((resolve) => setTimeout(resolve, 180));
-  if (action === "adminList") return { success: true, ...mockState };
+  if (action === "adminList") return { success: true, adminSession: { role: "super_admin", communityIds: [] }, ...mockState };
+  if (action === "adminUpdateUser") {
+    mockState.users = mockState.users.map((item) => item.id === data.userId ? { ...item, display_name: data.patch?.displayName ?? item.display_name, status: data.patch?.status ?? item.status, experience_points: data.patch?.experiencePoints ?? item.experience_points } : item);
+    return { success: true, saved: true };
+  }
+  if (action === "adminDeleteUser") {
+    mockState.users = mockState.users.map((item) => item.id === data.userId ? { ...item, status: "disabled", is_admin: 0 } : item);
+    return { success: true, saved: true };
+  }
+  if (action === "adminUpdateCommunity") {
+    const patch = data.patch || {};
+    const values = {
+      name: patch.name,
+      badge_name: patch.badgeName,
+      description: patch.description,
+      logo_url: patch.logoUrl,
+      certification_method: patch.certificationMethod,
+      status: patch.status,
+      sort_weight: patch.sortWeight,
+    };
+    if (data.communityId) {
+      mockState.communities = mockState.communities.map((item) => item.id === data.communityId ? { ...item, ...Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) } : item);
+      return { success: true, saved: true };
+    }
+    const community = { id: Date.now(), ...Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) };
+    mockState.communities = [community, ...mockState.communities];
+    return { success: true, saved: true, communityId: community.id };
+  }
+  if (action === "adminUpsertAdminAccount") {
+    const patch = data.patch || {};
+    if (data.accountId) {
+      mockState.adminAccounts = mockState.adminAccounts.map((item) => item.id === data.accountId ? { ...item, ...patch, communityIds: patch.communityIds || [] } : item);
+    } else {
+      mockState.adminAccounts = [{ id: Date.now(), ...patch, updated_at: now }, ...mockState.adminAccounts];
+    }
+    return { success: true, saved: true };
+  }
+  if (action === "adminDeleteAdminAccount") {
+    mockState.adminAccounts = mockState.adminAccounts.map((item) => item.id === data.accountId ? { ...item, status: "disabled" } : item);
+    return { success: true, saved: true };
+  }
+  if (action === "adminSaveUserCommunity" || action === "adminRevokeUserCommunity") {
+    return { success: true, saved: true };
+  }
+  if (action === "adminListUserEvidence") return { success: true, evidence: [] };
+  if (action === "adminSearchUsersForCertification") {
+    const keyword = String(data.keyword || "").toLowerCase();
+    const users = mockState.users.filter((item) =>
+      [item.id, item.openid, item.display_name, item.profile?.name, item.profile?.job, item.profile?.wechat]
+        .some((value) => String(value || "").toLowerCase().includes(keyword))
+    );
+    return { success: true, users };
+  }
+  if (action === "processRagIndexJobs") return { success: true, checked: 0, completed: 0, failed: 0 };
   if (action === "adminSetUserStatus") {
     mockState.users = mockState.users.map((item) => item.id === data.userId ? { ...item, status: data.status } : item);
     return { success: true, saved: true };
@@ -232,16 +323,26 @@ async function mockCall(action, data) {
     return { success: true, saved: true };
   }
   if (action === "adminUpdateProject") {
-    mockState.projects = mockState.projects.map((item) => item.id === data.projectId ? { ...item, ...data.patch } : item);
+    const patch = { ...data.patch };
+    if (patch.communityId !== undefined) {
+      patch.community_id = patch.communityId;
+      delete patch.communityId;
+    }
+    mockState.projects = mockState.projects.map((item) => item.id === data.projectId ? { ...item, ...patch } : item);
     return { success: true, saved: true };
   }
   if (action === "adminCreateEvent") {
-    const event = { id: Date.now(), ...data.event };
+    const event = { id: Date.now(), ...data.event, community_id: data.event?.communityId || data.event?.community_id || null };
     mockState.events = [event, ...mockState.events];
     return { success: true, eventId: event.id };
   }
   if (action === "adminUpdateEvent") {
-    mockState.events = mockState.events.map((item) => item.id === data.eventId ? { ...item, ...data.event } : item);
+    const event = { ...data.event };
+    if (event.communityId !== undefined) {
+      event.community_id = event.communityId;
+      delete event.communityId;
+    }
+    mockState.events = mockState.events.map((item) => item.id === data.eventId ? { ...item, ...event } : item);
     return { success: true, saved: true };
   }
   return { success: false, message: `Mock 未实现 ${action}` };

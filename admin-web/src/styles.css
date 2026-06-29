@@ -301,6 +301,24 @@ th {
   background: #f2b8a2;
 }
 
+.empty-state {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: 22px 12px;
+  color: #6f6a63;
+  text-align: center;
+}
+
+.empty-state strong {
+  color: #342f2a;
+  font-size: 14px;
+}
+
+.empty-state span {
+  font-size: 12px;
+}
+
 .content-grid {
   display: grid;
   gap: 18px;
@@ -576,6 +594,15 @@ th {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 92px;
   gap: 8px;
+}
+
+.cover-preview {
+  width: 100%;
+  max-height: 150px;
+  object-fit: cover;
+  border: 2px solid #23211f;
+  border-radius: 12px;
+  background: #fff8e8;
 }
 
 .upload-button {

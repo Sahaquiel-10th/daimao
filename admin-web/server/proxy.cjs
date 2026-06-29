@@ -38,7 +38,9 @@ function getRdb() {
 
 function assertRdb(result, action) {
   if (result && result.error) {
-    const error = new Error(`${action || "CloudBase RDB"} 失败`);
+    const raw = result.error || {};
+    const reason = raw.message || raw.msg || raw.error || raw.code || "";
+    const error = new Error(`${action || "CloudBase RDB"} 失败${reason ? `：${reason}` : ""}`);
     error.code = "RDB_ERROR";
     error.details = result.error;
     throw error;
@@ -378,8 +380,37 @@ async function assertScopedBusinessAction(data) {
     await assertEvidenceInSessionCommunities(data, data.evidenceId || data.id);
     return;
   }
-  const allowed = new Set(["adminCreateEvent", "adminUpdateEvent", "adminUpdateProject"]);
-  if (allowed.has(action)) return;
+  if (action === "adminUpdateProject") {
+    const patchCommunityId = data.patch && (data.patch.communityId !== undefined ? data.patch.communityId : data.patch.community_id);
+    const rows = await rdbSelect("projects", "id,community_id", (request) => request.eq("id", id(data.projectId, "projectId")).limit(1)).catch(() => []);
+    const project = rows[0];
+    if (!project) {
+      const error = new Error("项目不存在");
+      error.code = "NOT_FOUND";
+      throw error;
+    }
+    requireCommunityAccess(data, project.community_id);
+    if (patchCommunityId !== undefined) requireCommunityAccess(data, patchCommunityId);
+    return;
+  }
+  if (action === "adminCreateEvent") {
+    const communityId = data.event && (data.event.communityId !== undefined ? data.event.communityId : data.event.community_id);
+    requireCommunityAccess(data, communityId);
+    return;
+  }
+  if (action === "adminUpdateEvent") {
+    const rows = await rdbSelect("official_events", "id,community_id", (request) => request.eq("id", id(data.eventId, "eventId")).limit(1)).catch(() => []);
+    const officialEvent = rows[0];
+    if (!officialEvent) {
+      const error = new Error("活动不存在");
+      error.code = "NOT_FOUND";
+      throw error;
+    }
+    requireCommunityAccess(data, officialEvent.community_id);
+    const nextCommunityId = data.event && (data.event.communityId !== undefined ? data.event.communityId : data.event.community_id);
+    if (nextCommunityId !== undefined) requireCommunityAccess(data, nextCommunityId);
+    return;
+  }
   const error = new Error("社区管理员无权执行此操作");
   error.code = "FORBIDDEN";
   throw error;
@@ -433,7 +464,7 @@ async function enrichAdminList(payload) {
     });
     membershipsByUser.set(Number(item.user_id), list);
   });
-  return {
+  const enriched = {
     ...payload,
     communities,
     communityMemberships: memberships,
@@ -446,6 +477,45 @@ async function enrichAdminList(payload) {
       profile: profilesByUser.get(Number(item.id)) || null,
       communities: membershipsByUser.get(Number(item.id)) || [],
     })),
+  };
+  return addAssetDisplayUrls(enriched);
+}
+
+function isCloudFileId(value) {
+  return typeof value === "string" && value.startsWith("cloud://");
+}
+
+async function addAssetDisplayUrls(payload) {
+  const fileIds = [];
+  const push = (value) => {
+    if (isCloudFileId(value) && !fileIds.includes(value)) fileIds.push(value);
+  };
+  (payload.users || []).forEach((item) => {
+    push(item.avatar_url);
+    push(item.profile && item.profile.avatar_url);
+  });
+  (payload.communities || []).forEach((item) => push(item.logo_url));
+  (payload.projects || []).forEach((item) => push(item.cover_url));
+  (payload.events || []).forEach((item) => push(item.cover_url));
+  if (!fileIds.length) return payload;
+  let urlMap = new Map();
+  try {
+    const result = await getApp().getTempFileURL({ fileList: fileIds });
+    urlMap = new Map((result.fileList || []).map((item) => [item.fileID, item.tempFileURL || item.download_url || ""]));
+  } catch (err) {
+    console.warn("获取 CloudBase 图片临时 URL 失败", err.message);
+  }
+  const display = (value) => (isCloudFileId(value) ? urlMap.get(value) || "" : value || "");
+  return {
+    ...payload,
+    users: (payload.users || []).map((item) => ({
+      ...item,
+      avatar_display_url: display(item.avatar_url),
+      profile: item.profile ? { ...item.profile, avatar_display_url: display(item.profile.avatar_url) } : item.profile,
+    })),
+    communities: (payload.communities || []).map((item) => ({ ...item, logo_display_url: display(item.logo_url) })),
+    projects: (payload.projects || []).map((item) => ({ ...item, cover_display_url: display(item.cover_url) })),
+    events: (payload.events || []).map((item) => ({ ...item, cover_display_url: display(item.cover_url) })),
   };
 }
 
@@ -467,16 +537,19 @@ function applyAdminScope(payload, session) {
   );
   const allowedSourceIds = new Set(ragSources.map((item) => Number(item.id)));
   const ragIndexJobs = (payload.ragIndexJobs || []).filter((item) => allowedSourceIds.has(Number(item.source_id)));
+  const projects = (payload.projects || []).filter((item) => allowed.has(Number(item.community_id)));
+  const events = (payload.events || []).filter((item) => allowed.has(Number(item.community_id)));
   return {
     ...payload,
     adminSession: session,
     communities,
     communityMemberships,
     users,
+    projects,
+    events,
     evidence,
     ragSources,
     ragIndexJobs,
-    // 当前 projects/events 还没有 community_id，先保留全量管理入口；后续加字段后再按社区过滤。
   };
 }
 

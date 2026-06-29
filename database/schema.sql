@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS projects (
   stage VARCHAR(80) NOT NULL DEFAULT '',
   goal TEXT NULL,
   creator_user_id BIGINT UNSIGNED NOT NULL,
+  community_id BIGINT UNSIGNED NULL,
   visibility ENUM('private','public') NOT NULL DEFAULT 'private',
   status ENUM('draft','active','paused','completed','archived') NOT NULL DEFAULT 'draft',
   star_count INT UNSIGNED NOT NULL DEFAULT 0,
@@ -147,7 +148,9 @@ CREATE TABLE IF NOT EXISTS projects (
   PRIMARY KEY (id),
   KEY idx_projects_public_sort (visibility, status, is_official_recommended, official_sort_weight, star_count, updated_at),
   KEY idx_projects_creator (creator_user_id),
-  CONSTRAINT fk_projects_creator FOREIGN KEY (creator_user_id) REFERENCES users(id)
+  KEY idx_projects_community (community_id, status, updated_at),
+  CONSTRAINT fk_projects_creator FOREIGN KEY (creator_user_id) REFERENCES users(id),
+  CONSTRAINT fk_projects_community FOREIGN KEY (community_id) REFERENCES communities(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS project_applications (
@@ -319,6 +322,7 @@ CREATE TABLE IF NOT EXISTS official_events (
   start_time DATETIME NOT NULL,
   end_time DATETIME NULL,
   host_user_id BIGINT UNSIGNED NOT NULL,
+  community_id BIGINT UNSIGNED NULL,
   status ENUM('draft','published','closed','cancelled','completed') NOT NULL DEFAULT 'draft',
   visibility ENUM('public','private') NOT NULL DEFAULT 'public',
   official_sort_weight INT NOT NULL DEFAULT 0,
@@ -327,7 +331,9 @@ CREATE TABLE IF NOT EXISTS official_events (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_events_public_sort (visibility, status, official_sort_weight, start_time),
-  CONSTRAINT fk_events_host FOREIGN KEY (host_user_id) REFERENCES users(id)
+  KEY idx_events_community (community_id, status, start_time),
+  CONSTRAINT fk_events_host FOREIGN KEY (host_user_id) REFERENCES users(id),
+  CONSTRAINT fk_events_community FOREIGN KEY (community_id) REFERENCES communities(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS event_registrations (
