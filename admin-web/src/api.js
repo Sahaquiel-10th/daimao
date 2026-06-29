@@ -119,32 +119,24 @@ export async function uploadAsset(kind, file) {
   const adminSessionToken = getToken();
   if (!adminSessionToken) throw new Error("请先登录后台");
   if (!file) throw new Error("请选择图片");
-  const dataUrl = await readFileAsDataUrl(file);
-  const response = await fetch("/api/upload", {
+  if (file.size > 8 * 1024 * 1024) throw new Error("图片不能超过 8MB");
+  const params = new URLSearchParams({
+    kind,
+    filename: file.name || "upload",
+  });
+  const response = await fetch(`/api/upload?${params.toString()}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      adminSessionToken,
-      kind,
-      filename: file.name,
-      contentType: file.type,
-      dataUrl,
-    }),
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+      "X-Admin-Session-Token": adminSessionToken,
+    },
+    body: file,
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload || !payload.success) {
     throw new Error((payload && payload.message) || `上传失败 HTTP ${response.status}`);
   }
   return payload;
-}
-
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("读取文件失败"));
-    reader.readAsDataURL(file);
-  });
 }
 
 async function callAdminProxy(action, data = {}) {

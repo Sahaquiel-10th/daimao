@@ -22,7 +22,8 @@ import catStretch from "./assets/cat-stretch-cutout.png";
 
 const tabs = [
   { key: "overview", label: "概览", icon: Activity },
-  { key: "users", label: "用户", icon: Users },
+  { key: "users", label: "用户", icon: Users, superOnly: true },
+  { key: "admins", label: "管理员", icon: Shield, superOnly: true },
   { key: "communities", label: "社区", icon: Building2 },
   { key: "projects", label: "项目", icon: Database },
   { key: "events", label: "活动", icon: CalendarDays },
@@ -73,6 +74,10 @@ function statusLabel(value) {
     pending: "等待",
     failed: "失败",
     revoked: "已撤销",
+    admin_note: "管理员备注",
+    admin_interview: "管理员访谈",
+    admin_evidence: "管理员证据",
+    risk_note: "风险备注",
   };
   return labels[value] || value || "-";
 }
@@ -149,6 +154,18 @@ function emptyCommunityDraft() {
   };
 }
 
+function emptyAdminDraft() {
+  return {
+    id: null,
+    username: "",
+    displayName: "",
+    password: "",
+    role: "community_admin",
+    status: "active",
+    communityIds: [],
+  };
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -169,8 +186,10 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState(null);
   const [userDraft, setUserDraft] = useState(null);
+  const [userEvidence, setUserEvidence] = useState([]);
   const [selectedCommunity, setSelectedCommunity] = useState(null);
   const [communityDraft, setCommunityDraft] = useState(null);
+  const [adminDraft, setAdminDraft] = useState(emptyAdminDraft());
   const [evidenceDraft, setEvidenceDraft] = useState(null);
   const [projectDraft, setProjectDraft] = useState(null);
   const [eventDraft, setEventDraft] = useState(emptyEvent);
@@ -187,6 +206,7 @@ export default function App() {
         if (next) {
           setSelectedUser(next);
           setUserDraft(userDraftFrom(next));
+          await loadUserEvidence(next.id);
         }
       }
       if (selectedCommunity) {
@@ -244,6 +264,29 @@ export default function App() {
       (user.communities || []).some((item) => Number(item.community_id) === Number(selectedCommunity.id) && item.status === "active")
     );
   }, [data, selectedCommunity]);
+  const selectedUserEvidence = useMemo(() => {
+    if (!selectedUser) return [];
+    return userEvidence;
+  }, [selectedUser, userEvidence]);
+  const adminSession = data?.adminSession || null;
+  const isSuperAdmin = adminSession?.role !== "community_admin";
+  const visibleTabs = useMemo(() => tabs.filter((tab) => !tab.superOnly || isSuperAdmin), [isSuperAdmin]);
+
+  useEffect(() => {
+    if (!visibleTabs.some((tab) => tab.key === activeTab)) {
+      setActiveTab("overview");
+    }
+  }, [activeTab, visibleTabs]);
+
+  async function loadUserEvidence(userId) {
+    if (!userId) {
+      setUserEvidence([]);
+      return [];
+    }
+    const result = await callAdmin("adminListUserEvidence", { userId });
+    setUserEvidence(result.evidence || []);
+    return result.evidence || [];
+  }
 
   async function run(action, payload, successMessage = "操作已完成") {
     setLoading(true);
@@ -258,6 +301,36 @@ export default function App() {
       setToast({ type: "error", message: err.message || "操作失败" });
       setLoading(false);
       return false;
+    }
+  }
+
+  async function submitCommunityEvidence() {
+    if (!evidenceDraft) return false;
+    setLoading(true);
+    setError("");
+    try {
+      await callAdmin("adminCreateCommunityMemberEvidence", {
+        userId: evidenceDraft.userId,
+        communityId: evidenceDraft.communityId,
+        evidenceType: evidenceDraft.evidenceType,
+        title: evidenceDraft.title,
+        content: evidenceDraft.content,
+        confidence: evidenceDraft.confidence,
+        file: evidenceDraft.file,
+      });
+      setEvidenceDraft(null);
+      await refresh();
+      setToast({ type: "success", message: "证据已保存，后台正在索引，约 1-3 分钟后可检索" });
+      callAdmin("processRagIndexJobs", { limit: 10 }).then(refresh).catch((err) => {
+        setToast({ type: "error", message: `证据已保存，但即时索引触发失败：${err.message || "请稍后由定时任务补偿"}` });
+      });
+      return true;
+    } catch (err) {
+      setError(err.message || "证据保存失败");
+      setToast({ type: "error", message: err.message || "证据保存失败" });
+      return false;
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -303,6 +376,9 @@ export default function App() {
   function selectUser(user) {
     setSelectedUser(user);
     setUserDraft(userDraftFrom(user));
+    loadUserEvidence(user.id).catch((err) => {
+      setToast({ type: "error", message: err.message || "证据链加载失败" });
+    });
   }
 
   function selectCommunity(community) {
@@ -361,7 +437,7 @@ export default function App() {
           <h1>呆猫后台</h1>
         </div>
         <nav>
-          {tabs.map((tab) => {
+          {visibleTabs.map((tab) => {
             const Icon = tab.icon;
             return (
               <button
@@ -383,6 +459,7 @@ export default function App() {
           <div className="top-title">
             <p className="eyebrow">CloudBase SQL Admin</p>
             <h2>{tabs.find((item) => item.key === activeTab)?.label}</h2>
+            {adminSession?.role === "community_admin" && <span className="role-pill">社区管理员</span>}
           </div>
           <div className="topbar-actions">
             <div className="searchbox">
@@ -454,7 +531,9 @@ export default function App() {
               draft={userDraft}
               user={selectedUser}
               communities={data?.communities || []}
+              evidence={selectedUserEvidence}
               onChange={setUserDraft}
+              onUploadAvatar={(file) => upload("user-avatar", file, (fileID) => setUserDraft((draft) => ({ ...draft, avatarUrl: fileID })))}
               onSubmit={() =>
                 userDraft &&
                 run("adminUpdateUser", {
@@ -487,6 +566,24 @@ export default function App() {
                   setUserDraft(null);
                 }
               }}
+              onSaveEvidence={(evidence) =>
+                run("adminUpdateUserEvidence", {
+                  evidenceId: evidence.id,
+                  evidenceType: evidence.evidence_type,
+                  content: evidence.content,
+                  confidence: evidence.confidence,
+                  status: evidence.status,
+                }, "证据已更新，后台正在重新索引").then((ok) => {
+                  if (ok) callAdmin("processRagIndexJobs", { limit: 10 }).then(() => {
+                    refresh();
+                    loadUserEvidence(userDraft.id);
+                  }).catch(() => {});
+                })
+              }
+              onArchiveEvidence={(evidenceId) => {
+                const ok = window.confirm("确认归档这条证据？归档后不会再用于 AI 审核，但历史记录仍保留。");
+                if (ok) run("adminArchiveUserEvidence", { evidenceId }, "证据已归档");
+              }}
                 />
               </Modal>
             )}
@@ -498,13 +595,14 @@ export default function App() {
             <section className="panel dm-card">
               <div className="panel-title-row">
                 <h3>社区与徽章</h3>
-                <button onClick={createCommunity}>新建社区</button>
+                {isSuperAdmin && <button onClick={createCommunity}>新建社区</button>}
               </div>
               <CommunityTable communities={filteredCommunities} onEdit={selectCommunity} />
             </section>
             <section className="community-layout">
               <CommunityEditor
                 draft={communityDraft}
+                readOnly={!isSuperAdmin}
                 onChange={setCommunityDraft}
                 onUpload={(file) => upload("community-logo", file, (fileID) => setCommunityDraft((draft) => ({ ...draft, logoUrl: fileID })))}
                 onSubmit={() =>
@@ -518,7 +616,6 @@ export default function App() {
               <CommunityMembers
                 community={selectedCommunity}
                 members={communityMembers}
-                allUsers={data?.users || []}
                 onCertify={(form) =>
                   selectedCommunity &&
                   run("adminSaveUserCommunity", {
@@ -566,20 +663,40 @@ export default function App() {
                     }));
                   }}
                   onSubmit={() =>
-                    evidenceDraft &&
-                    run("adminCreateCommunityMemberEvidence", {
-                      userId: evidenceDraft.userId,
-                      communityId: evidenceDraft.communityId,
-                      evidenceType: evidenceDraft.evidenceType,
-                      title: evidenceDraft.title,
-                      content: evidenceDraft.content,
-                      confidence: evidenceDraft.confidence,
-                      file: evidenceDraft.file,
-                    }, "证据已写入，等待 RAG 索引").then((ok) => ok && setEvidenceDraft(null))
+                    submitCommunityEvidence()
                   }
                 />
               </Modal>
             )}
+          </section>
+        )}
+
+        {activeTab === "admins" && (
+          <section className="split-view">
+            <section className="panel dm-card">
+              <div className="panel-title-row">
+                <h3>后台管理员</h3>
+                <button type="button" onClick={() => setAdminDraft(emptyAdminDraft())}>新建管理员</button>
+              </div>
+              <AdminAccountTable accounts={data?.adminAccounts || []} communities={data?.communities || []} onEdit={setAdminDraft} />
+            </section>
+            <AdminAccountEditor
+              draft={adminDraft}
+              communities={data?.communities || []}
+              onChange={setAdminDraft}
+              onSubmit={() =>
+                adminDraft &&
+                run("adminUpsertAdminAccount", {
+                  accountId: adminDraft.id,
+                  patch: adminDraft,
+                }, adminDraft.id ? "管理员账号已保存" : "管理员账号已创建")
+              }
+              onDisable={() => {
+                if (!adminDraft?.id) return;
+                const ok = window.confirm(`确认停用管理员「${adminDraft.username}」？`);
+                if (ok) run("adminDeleteAdminAccount", { accountId: adminDraft.id }, "管理员账号已停用");
+              }}
+            />
           </section>
         )}
 
@@ -711,8 +828,10 @@ function Modal({ title, children, onClose }) {
   );
 }
 
-function UserEditor({ draft, user, communities, onChange, onSubmit, onSaveCommunity, onRevokeCommunity, onDelete }) {
+function UserEditor({ draft, user, communities, evidence, onChange, onUploadAvatar, onSubmit, onSaveCommunity, onRevokeCommunity, onDelete, onSaveEvidence, onArchiveEvidence }) {
   const [communityForm, setCommunityForm] = useState({ communityId: "", tagsText: "" });
+  const [editingEvidenceId, setEditingEvidenceId] = useState(null);
+  const [evidenceDraft, setEvidenceDraft] = useState(null);
   if (!draft) {
     return (
       <aside className="panel editor-panel dm-card">
@@ -729,8 +848,11 @@ function UserEditor({ draft, user, communities, onChange, onSubmit, onSaveCommun
       <Field label="展示名">
         <input value={draft.displayName} onChange={(event) => onChange({ ...draft, displayName: event.target.value })} />
       </Field>
-      <Field label="头像 URL / cloud fileID">
-        <input value={draft.avatarUrl} onChange={(event) => onChange({ ...draft, avatarUrl: event.target.value })} />
+      <Field label="头像">
+        <div className="asset-row">
+          <input value={draft.avatarUrl} onChange={(event) => onChange({ ...draft, avatarUrl: event.target.value })} placeholder="上传后自动填入 cloud://..." />
+          <UploadButton onUpload={onUploadAvatar} />
+        </div>
       </Field>
       <Field label="经验值">
         <input type="number" value={draft.experiencePoints} onChange={(event) => onChange({ ...draft, experiencePoints: event.target.value })} />
@@ -785,7 +907,166 @@ function UserEditor({ draft, user, communities, onChange, onSubmit, onSaveCommun
         <input value={communityForm.tagsText} onChange={(event) => setCommunityForm({ ...communityForm, tagsText: event.target.value })} placeholder="如 AI产品 需求梳理" />
       </Field>
       <button onClick={() => onSaveCommunity(communityForm)}>保存社区认证</button>
+      <div className="editor-divider" />
+      <section className="embedded-section">
+        <h4>密封证据链</h4>
+        {(evidence || []).length ? (
+          <div className="evidence-list">
+            {(evidence || []).map((item) => {
+              const isEditing = Number(editingEvidenceId) === Number(item.id);
+              const current = isEditing ? evidenceDraft : item;
+              return (
+                <div className="evidence-item" key={item.id}>
+                  <div className="evidence-meta">
+                    <Badge tone={item.status === "confirmed" ? "success" : item.status === "rejected" ? "danger" : "default"}>{statusLabel(item.status)}</Badge>
+                    <span>{statusLabel(item.evidence_type)}</span>
+                    <span>可信度 {Number(item.confidence || 0).toFixed(2)}</span>
+                    <span>{formatDate(item.created_at)}</span>
+                  </div>
+                  {isEditing ? (
+                    <>
+                      <Field label="证据类型">
+                        <select value={current.evidence_type} onChange={(event) => setEvidenceDraft({ ...current, evidence_type: event.target.value })}>
+                          <option value="admin_note">管理员备注</option>
+                          <option value="admin_interview">管理员访谈</option>
+                          <option value="admin_evidence">管理员证据</option>
+                          <option value="risk_note">风险备注</option>
+                        </select>
+                      </Field>
+                      <Field label="可信度">
+                        <input type="number" min="0" max="1" step="0.01" value={current.confidence} onChange={(event) => setEvidenceDraft({ ...current, confidence: event.target.value })} />
+                      </Field>
+                      <Field label="状态">
+                        <select value={current.status} onChange={(event) => setEvidenceDraft({ ...current, status: event.target.value })}>
+                          <option value="confirmed">确认</option>
+                          <option value="candidate">候选</option>
+                          <option value="rejected">归档/停用</option>
+                        </select>
+                      </Field>
+                      <Field label="证据内容">
+                        <textarea value={current.content} onChange={(event) => setEvidenceDraft({ ...current, content: event.target.value })} />
+                      </Field>
+                      <div className="inline-actions">
+                        <button className="primary-button" onClick={() => onSaveEvidence(current).then(() => { setEditingEvidenceId(null); setEvidenceDraft(null); })}>保存证据</button>
+                        <button onClick={() => { setEditingEvidenceId(null); setEvidenceDraft(null); }}>取消</button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="evidence-content">{item.content}</p>
+                      <div className="inline-actions">
+                        <button onClick={() => { setEditingEvidenceId(item.id); setEvidenceDraft({ ...item }); }}>编辑</button>
+                        {item.status !== "rejected" && <button className="danger-button" onClick={() => onArchiveEvidence(item.id)}>归档</button>}
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="muted small-muted">暂无密封证据。可以在社区成员列表里上传。</p>
+        )}
+      </section>
     </div>
+  );
+}
+
+function AdminAccountTable({ accounts, communities, onEdit }) {
+  const communityMap = new Map((communities || []).map((item) => [Number(item.id), item.name]));
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>账号</th>
+          <th>角色</th>
+          <th>可管理社区</th>
+          <th>状态</th>
+          <th>更新时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {(accounts || []).map((account) => (
+          <tr key={account.id}>
+            <td>
+              <div className="title-stack">
+                <strong>{account.display_name || account.username}</strong>
+                <span>{account.username}</span>
+              </div>
+            </td>
+            <td><Badge tone={account.role === "super_admin" ? "blue" : "yellow"}>{account.role === "super_admin" ? "超级管理员" : "社区管理员"}</Badge></td>
+            <td>
+              <div className="badge-row">
+                {account.role === "super_admin" ? <Badge tone="blue">全部社区</Badge> : (account.communityIds || []).map((idValue) => (
+                  <Badge key={`${account.id}-${idValue}`}>{communityMap.get(Number(idValue)) || `社区 ${idValue}`}</Badge>
+                ))}
+              </div>
+            </td>
+            <td><Badge tone={account.status === "active" ? "green" : "red"}>{statusLabel(account.status)}</Badge></td>
+            <td>{formatDate(account.updated_at)}</td>
+            <td><button type="button" onClick={() => onEdit({ ...account, password: "" })}>编辑</button></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function AdminAccountEditor({ draft, communities, onChange, onSubmit, onDisable }) {
+  if (!draft) return null;
+  const selected = new Set((draft.communityIds || []).map(Number));
+  function toggleCommunity(communityId) {
+    const idValue = Number(communityId);
+    const next = new Set(selected);
+    if (next.has(idValue)) next.delete(idValue);
+    else next.add(idValue);
+    onChange({ ...draft, communityIds: Array.from(next) });
+  }
+  return (
+    <aside className="panel editor-panel dm-card">
+      <div className="editor-title">
+        <h3>{draft.id ? "编辑管理员" : "新建管理员"}</h3>
+        {draft.id && <button className="danger-button" type="button" onClick={onDisable}>停用</button>}
+      </div>
+      <Field label="登录账号">
+        <input value={draft.username || ""} onChange={(event) => onChange({ ...draft, username: event.target.value })} placeholder="例如 opc_admin" />
+      </Field>
+      <Field label="显示名称">
+        <input value={draft.displayName || ""} onChange={(event) => onChange({ ...draft, displayName: event.target.value })} placeholder="例如 OPC 社区管理员" />
+      </Field>
+      <Field label={draft.id ? "新密码（不改可留空）" : "登录密码"}>
+        <input type="password" value={draft.password || ""} onChange={(event) => onChange({ ...draft, password: event.target.value })} placeholder="至少 10 位" />
+      </Field>
+      <Field label="角色">
+        <select value={draft.role || "community_admin"} onChange={(event) => onChange({ ...draft, role: event.target.value })}>
+          <option value="community_admin">社区管理员</option>
+          <option value="super_admin">超级管理员</option>
+        </select>
+      </Field>
+      <Field label="状态">
+        <select value={draft.status || "active"} onChange={(event) => onChange({ ...draft, status: event.target.value })}>
+          <option value="active">启用</option>
+          <option value="disabled">停用</option>
+        </select>
+      </Field>
+      {draft.role !== "super_admin" && (
+        <section className="embedded-section">
+          <h4>可管理社区</h4>
+          <div className="checkbox-grid">
+            {(communities || []).map((community) => (
+              <label className="check-row" key={community.id}>
+                <input type="checkbox" checked={selected.has(Number(community.id))} onChange={() => toggleCommunity(community.id)} />
+                {community.name}
+              </label>
+            ))}
+          </div>
+        </section>
+      )}
+      <button className="primary-button" type="button" onClick={onSubmit}>
+        {draft.id ? "保存管理员" : "创建管理员"}
+      </button>
+    </aside>
   );
 }
 
@@ -824,42 +1105,43 @@ function CommunityTable({ communities, onEdit }) {
   );
 }
 
-function CommunityEditor({ draft, onChange, onSubmit, onUpload }) {
+function CommunityEditor({ draft, readOnly = false, onChange, onSubmit, onUpload }) {
   if (!draft) {
     return (
       <aside className="panel editor-panel dm-card">
         <h3>社区编辑</h3>
-        <p className="muted">选择左侧社区后，可以维护社区名称、徽章、logo 和排序。</p>
+        <p className="muted">选择左侧社区后，可以查看社区名称、徽章、logo 和排序。只有超级管理员可以编辑社区主体资料。</p>
       </aside>
     );
   }
   return (
     <aside className="panel editor-panel dm-card">
       <h3>社区编辑</h3>
+      {readOnly && <p className="muted small-muted">社区管理员只能维护本社区成员、活动和证据链；社区主体资料由超级管理员维护。</p>}
       <Field label="社区名称">
-        <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
+        <input disabled={readOnly} value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
       </Field>
       <Field label="徽章名称">
-        <input value={draft.badgeName} onChange={(event) => onChange({ ...draft, badgeName: event.target.value })} />
+        <input disabled={readOnly} value={draft.badgeName} onChange={(event) => onChange({ ...draft, badgeName: event.target.value })} />
       </Field>
       <Field label="社区说明">
-        <textarea value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} />
+        <textarea disabled={readOnly} value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} />
       </Field>
-      <Field label="社区 logo / cloud fileID">
+      <Field label="社区 logo">
         <div className="asset-row">
-          <input value={draft.logoUrl} onChange={(event) => onChange({ ...draft, logoUrl: event.target.value })} placeholder="cloud://..." />
-          <UploadButton onUpload={onUpload} />
+          <input disabled={readOnly} value={draft.logoUrl} onChange={(event) => onChange({ ...draft, logoUrl: event.target.value })} placeholder="上传后自动填入 cloud://..." />
+          {!readOnly && <UploadButton onUpload={onUpload} />}
         </div>
       </Field>
       <Field label="状态">
-        <select value={draft.status} onChange={(event) => onChange({ ...draft, status: event.target.value })}>
+        <select disabled={readOnly} value={draft.status} onChange={(event) => onChange({ ...draft, status: event.target.value })}>
           <option value="active">启用</option>
           <option value="paused">暂停</option>
           <option value="archived">归档</option>
         </select>
       </Field>
       <Field label="认证方式">
-        <select value={draft.certificationMethod} onChange={(event) => onChange({ ...draft, certificationMethod: event.target.value })}>
+        <select disabled={readOnly} value={draft.certificationMethod} onChange={(event) => onChange({ ...draft, certificationMethod: event.target.value })}>
           <option value="manual_review">人工审核</option>
           <option value="review_meeting">评审会通过</option>
           <option value="paid_event">参加付费活动</option>
@@ -868,15 +1150,27 @@ function CommunityEditor({ draft, onChange, onSubmit, onUpload }) {
         </select>
       </Field>
       <Field label="排序权重">
-        <input type="number" value={draft.sortWeight} onChange={(event) => onChange({ ...draft, sortWeight: event.target.value })} />
+        <input disabled={readOnly} type="number" value={draft.sortWeight} onChange={(event) => onChange({ ...draft, sortWeight: event.target.value })} />
       </Field>
-      <button className="primary-button" onClick={onSubmit}>{draft.id ? "保存社区" : "创建社区"}</button>
+      {!readOnly && <button className="primary-button" onClick={onSubmit}>{draft.id ? "保存社区" : "创建社区"}</button>}
     </aside>
   );
 }
 
-function CommunityMembers({ community, members, allUsers, onCertify, onRevoke, onCreateEvidence }) {
+function CommunityMembers({ community, members, onCertify, onRevoke, onCreateEvidence }) {
   const [form, setForm] = useState({ userId: "", tagsText: "" });
+  const [keyword, setKeyword] = useState("");
+  const [candidates, setCandidates] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+
+  useEffect(() => {
+    setForm({ userId: "", tagsText: "" });
+    setKeyword("");
+    setCandidates([]);
+    setSearchError("");
+  }, [community?.id]);
+
   if (!community) {
     return (
       <section className="panel editor-panel dm-card">
@@ -886,24 +1180,64 @@ function CommunityMembers({ community, members, allUsers, onCertify, onRevoke, o
     );
   }
   const activeIds = new Set(members.map((item) => Number(item.id)));
-  const candidateUsers = allUsers.filter((item) => !activeIds.has(Number(item.id)));
+  async function searchUsers() {
+    if (!keyword.trim()) {
+      setSearchError("请输入姓名、微信号、openid 或用户 ID");
+      return;
+    }
+    setSearching(true);
+    setSearchError("");
+    try {
+      const result = await callAdmin("adminSearchUsersForCertification", {
+        communityId: community.id,
+        keyword: keyword.trim(),
+      });
+      setCandidates(result.users || []);
+    } catch (err) {
+      setSearchError(err.message || "搜索失败");
+    } finally {
+      setSearching(false);
+    }
+  }
   return (
     <section className="panel editor-panel dm-card">
       <h3>{community.name} · 成员</h3>
       <div className="member-tools">
-        <Field label="添加认证成员">
-          <select value={form.userId} onChange={(event) => setForm({ ...form, userId: event.target.value })}>
-            <option value="">选择用户</option>
-            {candidateUsers.map((item) => (
-              <option key={item.id} value={item.id}>{item.display_name || item.profile?.name || item.openid || item.id}</option>
-            ))}
-          </select>
+        <Field label="搜索用户">
+          <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="姓名 / 微信号 / openid / 用户ID" onKeyDown={(event) => event.key === "Enter" && searchUsers()} />
         </Field>
         <Field label="社区标签">
           <input value={form.tagsText} onChange={(event) => setForm({ ...form, tagsText: event.target.value })} placeholder="如 技术验证 项目推进" />
         </Field>
-        <button type="button" onClick={() => onCertify(form)}>添加认证</button>
+        <button type="button" onClick={searchUsers} disabled={searching}>{searching ? "搜索中" : "搜索"}</button>
       </div>
+      {searchError && <p className="form-error">{searchError}</p>}
+      {candidates.length > 0 && (
+        <div className="candidate-list">
+          {candidates.map((item) => {
+            const alreadyActive = activeIds.has(Number(item.id)) || item.membership?.status === "active";
+            const name = item.display_name || item.profile?.name || item.openid || item.id;
+            return (
+              <div className="candidate-card" key={item.id}>
+                <div className="title-stack">
+                  <strong>{name}</strong>
+                  <span>ID {item.id} · {item.profile?.job || item.profile?.wechat || item.openid || "暂无资料"}</span>
+                </div>
+                <button
+                  type="button"
+                  disabled={alreadyActive}
+                  onClick={() => {
+                    setForm((next) => ({ ...next, userId: item.id }));
+                    onCertify({ ...form, userId: item.id });
+                  }}
+                >
+                  {alreadyActive ? "已认证" : "认证进社区"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="member-list">
         {members.length ? members.map((member) => {
           const membership = (member.communities || []).find((item) => Number(item.community_id) === Number(community.id)) || {};

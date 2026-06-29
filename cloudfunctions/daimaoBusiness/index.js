@@ -33,6 +33,10 @@ const SECRETARY_RETRIEVAL_PROMPT = process.env.SECRETARY_RETRIEVAL_PROMPT || def
 const VECTOR_TOP_K = Math.min(Math.max(Number(process.env.VECTOR_TOP_K || 4), 1), 10);
 const RAG_RETRIEVAL_QUERY_COUNT = Math.min(Math.max(Number(process.env.RAG_RETRIEVAL_QUERY_COUNT || 6), 5), 6);
 const RAG_RETRIEVAL_TOP_K = Math.min(Math.max(Number(process.env.RAG_RETRIEVAL_TOP_K || 3), 1), 3);
+const RAG_RETRIEVAL_CANDIDATE_TOP_K = Math.min(
+  Math.max(Number(process.env.RAG_RETRIEVAL_CANDIDATE_TOP_K || 12), RAG_RETRIEVAL_TOP_K),
+  20
+);
 const RAG_MAX_CHUNK_CHARS = Math.min(Math.max(Number(process.env.RAG_MAX_CHUNK_CHARS || 700), 300), 1200);
 const RAG_CHUNK_OVERLAP_CHARS = Math.min(Math.max(Number(process.env.RAG_CHUNK_OVERLAP_CHARS || 80), 0), 200);
 const MYSQL_CONNECT_TIMEOUT = Number(process.env.MYSQL_CONNECT_TIMEOUT || 20000);
@@ -2811,6 +2815,148 @@ async function adminCreateCommunityMemberEvidence(event, user) {
   }, user);
 }
 
+async function adminListUserEvidence(event, user) {
+  await requireAdmin(user);
+  const targetUserId = id(event.userId || event.targetUserId);
+  const evidenceRows = useRdb()
+    ? await rdbSelect("evidence_records", "*", (request) =>
+        request.eq("user_id", targetUserId).order("created_at", { ascending: false }).limit(200)
+      )
+    : await query("SELECT * FROM evidence_records WHERE user_id=? ORDER BY created_at DESC LIMIT 200", [targetUserId]);
+  if (!evidenceRows.length) return { evidence: [] };
+
+  const activeEvidence = evidenceRows.filter((item) => item.status === "confirmed");
+  const sourceKeys = activeEvidence.map((item) => ({
+    evidenceId: Number(item.id),
+    sourceType: adminEvidenceSourceType(item.evidence_type),
+  }));
+  const sourceRows = sourceKeys.length && useRdb()
+    ? await rdbSelect("rag_sources", "id,source_type,source_id,status,last_indexed_at,error_message", (request) =>
+        request.in("source_id", sourceKeys.map((item) => item.evidenceId)).limit(300)
+      )
+    : sourceKeys.length
+      ? await query(
+          `SELECT id,source_type,source_id,status,last_indexed_at,error_message
+           FROM rag_sources WHERE source_id IN (${sourceKeys.map(() => "?").join(",")})`,
+          sourceKeys.map((item) => item.evidenceId)
+        )
+      : [];
+  const sourceByKey = new Map(sourceRows.map((item) => [`${item.source_type}:${Number(item.source_id)}`, item]));
+  return {
+    evidence: evidenceRows.map((item) => {
+      const sourceType = adminEvidenceSourceType(item.evidence_type);
+      const ragSource = sourceByKey.get(`${sourceType}:${Number(item.id)}`) || null;
+      return {
+        ...item,
+        ragSource,
+      };
+    }),
+  };
+}
+
+async function archiveEvidenceRagSource(evidence) {
+  const sourceType = adminEvidenceSourceType(evidence.evidence_type);
+  const sourceId = Number(evidence.id);
+  if (useRdb()) {
+    const sources = await rdbSelect("rag_sources", "id", (request) =>
+      request.eq("source_type", sourceType).eq("source_id", sourceId).limit(20)
+    );
+    for (const source of sources) {
+      await rdbUpdate("rag_chunks", { status: "archived" }, (request) => request.eq("source_id", source.id));
+      await rdbUpdate("rag_sources", { status: "archived", error_message: null }, (request) => request.eq("id", source.id));
+    }
+    return sources.length;
+  }
+  const sources = await query("SELECT id FROM rag_sources WHERE source_type=? AND source_id=?", [sourceType, sourceId]);
+  for (const source of sources) {
+    await query("UPDATE rag_chunks SET status='archived' WHERE source_id=?", [source.id]);
+    await query("UPDATE rag_sources SET status='archived',error_message=NULL WHERE id=?", [source.id]);
+  }
+  return sources.length;
+}
+
+async function adminUpdateUserEvidence(event, user) {
+  await requireAdmin(user);
+  const evidenceId = id(event.evidenceId || event.id);
+  const rows = useRdb()
+    ? await rdbSelect("evidence_records", "*", (request) => request.eq("id", evidenceId).limit(1))
+    : await query("SELECT * FROM evidence_records WHERE id=? LIMIT 1", [evidenceId]);
+  const existing = rows[0];
+  if (!existing) throw codedError("NOT_FOUND", "证据不存在");
+  const evidenceType = ["admin_note", "admin_interview", "admin_evidence", "risk_note"].includes(event.evidenceType)
+    ? event.evidenceType
+    : existing.evidence_type;
+  const content = text(event.content, 120000);
+  if (!content) throw codedError("VALIDATION_ERROR", "证据内容不能为空");
+  const confidence = Math.min(Math.max(Number(event.confidence ?? existing.confidence ?? 0.9), 0), 1);
+  const status = ["candidate", "confirmed", "rejected"].includes(event.status) ? event.status : existing.status;
+  const patch = {
+    evidence_type: evidenceType,
+    content,
+    confidence,
+    status,
+  };
+  if (useRdb()) {
+    await rdbUpdate("evidence_records", patch, (request) => request.eq("id", evidenceId));
+  } else {
+    await query("UPDATE evidence_records SET evidence_type=?,content=?,confidence=?,status=? WHERE id=?", [
+      patch.evidence_type,
+      patch.content,
+      patch.confidence,
+      patch.status,
+      evidenceId,
+    ]);
+  }
+
+  let rag = null;
+  if (status === "confirmed") {
+    const updated = { ...existing, ...patch, id: evidenceId };
+    await archiveEvidenceRagSource(existing);
+    rag = await upsertRagSourceForCurrentDriver({
+      sourceType: adminEvidenceSourceType(evidenceType),
+      sourceId: evidenceId,
+      ownerUserId: Number(updated.user_id),
+      projectId: updated.project_id || null,
+      eventId: updated.event_id || null,
+      communityId: updated.community_id || null,
+      title: event.title || `管理员证据：${updated.user_id}`,
+      summary: truncate(content, 500),
+      tags: parseTags(event.tagsText || event.tags || ""),
+      visibility: "sealed",
+      sourceTrust: adminEvidenceSourceTrust(evidenceType),
+      content,
+      metadata: {
+        source: "adminUpdateUserEvidence",
+        source_trust: adminEvidenceSourceTrust(evidenceType),
+        evidence_type: evidenceType,
+        updated_by: user.id,
+      },
+    });
+  } else {
+    await archiveEvidenceRagSource({ ...existing, ...patch, id: evidenceId });
+  }
+  await adminLog(user, "update_user_evidence", "evidence", evidenceId, { status, evidenceType });
+  return { evidenceId, rag };
+}
+
+async function adminArchiveUserEvidence(event, user) {
+  await requireAdmin(user);
+  const evidenceId = id(event.evidenceId || event.id);
+  const rows = useRdb()
+    ? await rdbSelect("evidence_records", "*", (request) => request.eq("id", evidenceId).limit(1))
+    : await query("SELECT * FROM evidence_records WHERE id=? LIMIT 1", [evidenceId]);
+  const existing = rows[0];
+  if (!existing) throw codedError("NOT_FOUND", "证据不存在");
+  if (useRdb()) {
+    await rdbUpdate("evidence_records", { status: "rejected" }, (request) => request.eq("id", evidenceId));
+  } else {
+    await query("UPDATE evidence_records SET status='rejected' WHERE id=?", [evidenceId]);
+  }
+  const archivedSources = await archiveEvidenceRagSource(existing);
+  await adminLog(user, "archive_user_evidence", "evidence", evidenceId, { archivedSources });
+  return { evidenceId, archivedSources };
+}
+
 async function adminTestProjectApplicationReview(event, user) {
   await requireAdmin(user);
   const { project, applicant, application, identity } = await buildAdminApplicationTestInput(event);
@@ -3494,6 +3640,76 @@ function bucketEvidence(items) {
   return buckets;
 }
 
+async function filterVectorEvidenceBySqlStatus(items, applicantUserId) {
+  const vectorItems = (items || []).filter(Boolean);
+  const chunkIds = unique(vectorItems.map((item) => Number(item.id || item.chunkId || 0)).filter((value) => Number.isSafeInteger(value) && value > 0));
+  const sourceRefs = vectorItems
+    .map((item) => ({
+      sourceType: text(item.sourceType, 60),
+      sourceId: Number(item.sourceId || 0),
+    }))
+    .filter((item) => item.sourceType && Number.isSafeInteger(item.sourceId) && item.sourceId > 0);
+  if (!chunkIds.length && !sourceRefs.length) return [];
+  try {
+    const chunkRows = useRdb()
+      ? await rdbSelect("rag_chunks", "id,source_id,status", (request) =>
+          chunkIds.length
+            ? request.in("id", chunkIds).in("status", ["pending", "indexed"]).limit(chunkIds.length)
+            : request.in("id", [-1]).limit(1)
+        )
+      : chunkIds.length
+        ? await query(
+            `SELECT id,source_id,status FROM rag_chunks
+             WHERE id IN (${chunkIds.map(() => "?").join(",")}) AND status IN ('pending','indexed')`,
+            chunkIds
+          )
+        : [];
+    const sourceIds = unique(chunkRows.map((row) => Number(row.source_id)).filter(Boolean));
+    const sourceRowsByChunk = sourceIds.length
+      ? useRdb()
+        ? await rdbSelect("rag_sources", "id,owner_user_id,status,visibility", (request) =>
+            request.in("id", sourceIds).eq("owner_user_id", applicantUserId).in("status", ["pending", "indexed"]).limit(sourceIds.length)
+          )
+        : await query(
+            `SELECT id,owner_user_id,status,visibility FROM rag_sources
+             WHERE id IN (${sourceIds.map(() => "?").join(",")}) AND owner_user_id=? AND status IN ('pending','indexed')`,
+            [...sourceIds, applicantUserId]
+          )
+      : [];
+    const sourceRefIds = unique(sourceRefs.map((item) => item.sourceId));
+    const sourceRowsByRef = sourceRefIds.length
+      ? useRdb()
+        ? await rdbSelect("rag_sources", "id,owner_user_id,source_type,source_id,status,visibility", (request) =>
+            request
+              .eq("owner_user_id", applicantUserId)
+              .in("source_id", sourceRefIds)
+              .in("status", ["pending", "indexed"])
+              .limit(Math.min(sourceRefIds.length * 3, 200))
+          )
+        : await query(
+            `SELECT id,owner_user_id,source_type,source_id,status,visibility
+             FROM rag_sources
+             WHERE owner_user_id=? AND source_id IN (${sourceRefIds.map(() => "?").join(",")}) AND status IN ('pending','indexed')
+             LIMIT ?`,
+            [applicantUserId, ...sourceRefIds, Math.min(sourceRefIds.length * 3, 200)]
+          )
+      : [];
+    const activeSourceIds = new Set(sourceRowsByChunk.map((row) => Number(row.id)));
+    const activeChunkIds = new Set(chunkRows.filter((row) => activeSourceIds.has(Number(row.source_id))).map((row) => Number(row.id)));
+    const activeSourceRefs = new Set(sourceRowsByRef.map((row) => `${row.source_type}:${Number(row.source_id)}`));
+    return vectorItems.filter((item) => {
+      const chunkId = Number(item.id || item.chunkId || 0);
+      if (chunkId) return activeChunkIds.has(chunkId);
+      const sourceType = text(item.sourceType, 60);
+      const sourceId = Number(item.sourceId || 0);
+      return Boolean(sourceType && sourceId && activeSourceRefs.has(`${sourceType}:${sourceId}`));
+    });
+  } catch (err) {
+    console.warn("filter vector evidence by sql status failed", err.message);
+    return [];
+  }
+}
+
 async function fallbackEvidenceSearch(plan, applicantUserId) {
   if (useRdb()) return fallbackEvidenceSearchRdb(plan, applicantUserId);
   const polarityFilter = plan.filters && plan.filters.evidence_polarity;
@@ -3580,9 +3796,11 @@ async function searchEvidence(plan, applicantUserId) {
   try {
     const userRagTag = await getActiveUserRagTag(applicantUserId);
     const userTags = userRagTag && userRagTag.user_tag_id ? [userRagTag.user_tag_id] : [];
+    const desiredTopK = Math.max(Number(plan.topK || RAG_RETRIEVAL_TOP_K), 1);
+    const candidateTopK = Math.max(desiredTopK, RAG_RETRIEVAL_CANDIDATE_TOP_K);
     const firstPayload = {
       query: plan.query,
-      topK: plan.topK || VECTOR_TOP_K,
+      topK: candidateTopK,
       filters: plan.filters,
       plan: plan.name,
       reaiTags: userTags.length ? userTags : undefined,
@@ -3591,14 +3809,18 @@ async function searchEvidence(plan, applicantUserId) {
     const normalized = (matches || [])
       .map((match) => normalizeVectorMatch(match, plan))
       .filter((item) => vectorMatchAllowed(item, plan, applicantUserId));
-    if (normalized.length) return normalized;
+    const activeNormalized = await filterVectorEvidenceBySqlStatus(normalized, applicantUserId);
+    if (activeNormalized.length >= desiredTopK) return activeNormalized.slice(0, desiredTopK);
     if (userTags.length) {
-      const defaultMatches = await vectorSearch({ query: plan.query, topK: plan.topK || VECTOR_TOP_K, filters: plan.filters, plan: plan.name });
+      const defaultMatches = await vectorSearch({ query: plan.query, topK: candidateTopK, filters: plan.filters, plan: plan.name });
       const defaultNormalized = (defaultMatches || [])
         .map((match) => normalizeVectorMatch(match, plan))
         .filter((item) => vectorMatchAllowed(item, plan, applicantUserId));
-      if (defaultNormalized.length) return defaultNormalized;
+      const activeDefaultNormalized = await filterVectorEvidenceBySqlStatus(defaultNormalized, applicantUserId);
+      const merged = bucketEvidence([...activeNormalized, ...activeDefaultNormalized])[plan.bucket] || [];
+      if (merged.length) return merged.slice(0, desiredTopK);
     }
+    if (activeNormalized.length) return activeNormalized.slice(0, desiredTopK);
   } catch (err) {
     console.warn("vector evidence search fallback", plan.name, err.message);
   }
@@ -4556,6 +4778,9 @@ const actions = {
   adminCreateProjectMemberReview,
   adminCreateUserEvidence,
   adminCreateCommunityMemberEvidence,
+  adminListUserEvidence,
+  adminUpdateUserEvidence,
+  adminArchiveUserEvidence,
   adminReaiGetProject,
   adminReaiProjectTagPatch,
   adminReaiPatchVdbTags,

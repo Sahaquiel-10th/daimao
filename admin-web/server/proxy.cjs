@@ -11,8 +11,12 @@ const secretId = process.env.TENCENTCLOUD_SECRETID || process.env.CLOUDBASE_SECR
 const secretKey = process.env.TENCENTCLOUD_SECRETKEY || process.env.CLOUDBASE_SECRET_KEY || process.env.CLOUDBASE_SECRETKEY;
 const adminUsername = process.env.ADMIN_WEB_USERNAME || "admin";
 const adminPassword = process.env.ADMIN_WEB_PASSWORD || "";
+const superUsername = process.env.ADMIN_SUPER_USERNAME || adminUsername || "superadmin";
+const superPassword = process.env.ADMIN_SUPER_PASSWORD || adminPassword || "";
+const communityAccountsJson = process.env.ADMIN_COMMUNITY_ACCOUNTS || "";
 const adminWebToken = process.env.ADMIN_WEB_TOKEN || "";
 const sessionSecret = process.env.ADMIN_SESSION_SECRET || adminWebToken || secretKey || "";
+const passwordHashIterations = Number(process.env.ADMIN_PASSWORD_HASH_ITERATIONS || 120000);
 
 let app;
 let rdbClient;
@@ -59,6 +63,12 @@ async function rdbInsert(table, values) {
   return assertRdb(await getRdb().from(table).insert(values), `新增 ${table}`).data || [];
 }
 
+async function rdbDelete(table, build) {
+  let request = getRdb().from(table).delete();
+  if (build) request = build(request);
+  return assertRdb(await request, `删除 ${table}`).data || null;
+}
+
 function readJson(request) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -85,6 +95,24 @@ function readJson(request) {
   });
 }
 
+function readBuffer(request, maxBytes = 8 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(Object.assign(new Error("上传文件不能超过 8MB"), { code: "PAYLOAD_TOO_LARGE" }));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+}
+
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
@@ -101,28 +129,91 @@ function sign(value) {
   return crypto.createHmac("sha256", sessionSecret).update(value).digest("base64url");
 }
 
-function createSessionToken(username) {
+function hashPassword(password) {
+  const raw = String(password || "");
+  if (raw.length < 10) {
+    const error = new Error("密码至少 10 位");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+  const salt = crypto.randomBytes(16).toString("base64url");
+  const hash = crypto.pbkdf2Sync(raw, salt, passwordHashIterations, 32, "sha256").toString("base64url");
+  return `pbkdf2_sha256$${passwordHashIterations}$${salt}$${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const parts = String(storedHash || "").split("$");
+  if (parts.length !== 4 || parts[0] !== "pbkdf2_sha256") return false;
+  const iterations = Number(parts[1]);
+  const salt = parts[2];
+  const expected = parts[3];
+  if (!iterations || !salt || !expected) return false;
+  const actual = crypto.pbkdf2Sync(String(password || ""), salt, iterations, 32, "sha256").toString("base64url");
+  const left = Buffer.from(actual);
+  const right = Buffer.from(expected);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function parseCommunityAccounts() {
+  if (communityAccountsJson) {
+    try {
+      const rows = JSON.parse(communityAccountsJson);
+      if (Array.isArray(rows)) {
+        return rows
+          .map((item) => ({
+            username: text(item.username, 80),
+            password: String(item.password || ""),
+            role: "community_admin",
+            communityIds: Array.isArray(item.communityIds) ? item.communityIds.map(Number).filter(Boolean) : [],
+          }))
+          .filter((item) => item.username && item.password && item.communityIds.length);
+      }
+    } catch (err) {
+      console.warn("ADMIN_COMMUNITY_ACCOUNTS 不是合法 JSON", err.message);
+    }
+  }
+  const username = process.env.ADMIN_COMMUNITY_USERNAME || "community_admin";
+  const password = process.env.ADMIN_COMMUNITY_PASSWORD || "";
+  const communityIds = String(process.env.ADMIN_COMMUNITY_IDS || "1")
+    .split(/[\s,，]+/)
+    .map(Number)
+    .filter(Boolean);
+  return password ? [{ username, password, role: "community_admin", communityIds }] : [];
+}
+
+const communityAccounts = parseCommunityAccounts();
+
+function createSessionToken(account) {
   if (!sessionSecret) throw new Error("缺少 ADMIN_SESSION_SECRET 或 ADMIN_WEB_TOKEN，无法创建后台会话");
   const payload = base64url(JSON.stringify({
-    username,
+    username: account.username,
+    accountId: account.accountId || null,
+    role: account.role,
+    communityIds: account.communityIds || [],
     exp: Date.now() + 12 * 60 * 60 * 1000,
   }));
   return `${payload}.${sign(payload)}`;
 }
 
 function verifySessionToken(token) {
-  if (!sessionSecret || !token || typeof token !== "string") return false;
+  if (!sessionSecret || !token || typeof token !== "string") return null;
   const [payload, signature] = token.split(".");
-  if (!payload || !signature) return false;
+  if (!payload || !signature) return null;
   const expected = sign(payload);
   const left = Buffer.from(signature);
   const right = Buffer.from(expected);
-  if (left.length !== right.length || !crypto.timingSafeEqual(left, right)) return false;
+  if (left.length !== right.length || !crypto.timingSafeEqual(left, right)) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return data && data.exp && Date.now() < Number(data.exp);
+    if (!data || !data.exp || Date.now() >= Number(data.exp)) return null;
+    return {
+      username: text(data.username, 80),
+      accountId: data.accountId ? Number(data.accountId) : null,
+      role: data.role === "community_admin" ? "community_admin" : "super_admin",
+      communityIds: Array.isArray(data.communityIds) ? data.communityIds.map(Number).filter(Boolean) : [],
+    };
   } catch (err) {
-    return false;
+    return null;
   }
 }
 
@@ -181,7 +272,7 @@ function fileExtension(filename, contentType) {
 }
 
 function safeAssetKind(value) {
-  return ["project-cover", "event-cover", "community-logo"].includes(value) ? value : "misc";
+  return ["project-cover", "event-cover", "community-logo", "user-avatar"].includes(value) ? value : "misc";
 }
 
 async function callBusiness(data) {
@@ -196,6 +287,102 @@ function resolveAdminWebToken(data) {
   if (data && data.adminWebToken) return data.adminWebToken;
   if (data && verifySessionToken(data.adminSessionToken) && adminWebToken) return adminWebToken;
   return "";
+}
+
+function sessionFromData(data) {
+  return verifySessionToken(data && data.adminSessionToken) || null;
+}
+
+function requireSuperAdmin(data) {
+  const session = sessionFromData(data);
+  if (!session || session.role !== "super_admin") {
+    const error = new Error("只有超级管理员可以执行此操作");
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  return session;
+}
+
+function requireCommunityAccess(data, communityId) {
+  const session = sessionFromData(data);
+  if (!session) {
+    const error = new Error("请先登录后台");
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  if (session.role === "super_admin") return session;
+  if (session.communityIds.includes(Number(communityId))) return session;
+  const error = new Error("无权管理这个社区");
+  error.code = "FORBIDDEN";
+  throw error;
+}
+
+async function assertUserInSessionCommunities(data, userId) {
+  const session = sessionFromData(data);
+  if (!session) {
+    const error = new Error("请先登录后台");
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  if (session.role === "super_admin") return session;
+  const allowedIds = session.communityIds || [];
+  if (!allowedIds.length) {
+    const error = new Error("无权查看这个用户");
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  const rows = await rdbSelect("community_memberships", "id", (request) =>
+    request.eq("user_id", id(userId, "userId")).in("community_id", allowedIds).eq("status", "active").limit(1)
+  ).catch(() => []);
+  if (rows[0]) return session;
+  const error = new Error("无权查看这个用户");
+  error.code = "FORBIDDEN";
+  throw error;
+}
+
+async function assertEvidenceInSessionCommunities(data, evidenceId) {
+  const session = sessionFromData(data);
+  if (!session) {
+    const error = new Error("请先登录后台");
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  if (session.role === "super_admin") return session;
+  const rows = await rdbSelect("evidence_records", "id,user_id,community_id", (request) =>
+    request.eq("id", id(evidenceId, "evidenceId")).limit(1)
+  ).catch(() => []);
+  const evidence = rows[0];
+  if (!evidence) {
+    const error = new Error("证据不存在");
+    error.code = "NOT_FOUND";
+    throw error;
+  }
+  if (evidence.community_id && session.communityIds.includes(Number(evidence.community_id))) return session;
+  return assertUserInSessionCommunities(data, evidence.user_id);
+}
+
+async function assertScopedBusinessAction(data) {
+  const session = sessionFromData(data);
+  if (!session || session.role === "super_admin") return;
+  const action = data.action;
+  if (["processRagIndexJobs"].includes(action)) return;
+  if (action === "adminCreateCommunityMemberEvidence") {
+    requireCommunityAccess(data, data.communityId);
+    return;
+  }
+  if (action === "adminListUserEvidence") {
+    await assertUserInSessionCommunities(data, data.userId || data.targetUserId);
+    return;
+  }
+  if (action === "adminUpdateUserEvidence" || action === "adminArchiveUserEvidence") {
+    await assertEvidenceInSessionCommunities(data, data.evidenceId || data.id);
+    return;
+  }
+  const allowed = new Set(["adminCreateEvent", "adminUpdateEvent", "adminUpdateProject"]);
+  if (allowed.has(action)) return;
+  const error = new Error("社区管理员无权执行此操作");
+  error.code = "FORBIDDEN";
+  throw error;
 }
 
 async function assertAdmin(data) {
@@ -262,7 +449,39 @@ async function enrichAdminList(payload) {
   };
 }
 
+function applyAdminScope(payload, session) {
+  if (!session || session.role === "super_admin") return { ...payload, adminSession: session || { role: "super_admin", communityIds: [] } };
+  const allowed = new Set((session.communityIds || []).map(Number));
+  const communities = (payload.communities || []).filter((item) => allowed.has(Number(item.id)));
+  const communityMemberships = (payload.communityMemberships || []).filter((item) => allowed.has(Number(item.community_id)));
+  const allowedUserIds = new Set(communityMemberships.map((item) => Number(item.user_id)));
+  const users = (payload.users || [])
+    .filter((item) => allowedUserIds.has(Number(item.id)))
+    .map((item) => ({
+      ...item,
+      communities: (item.communities || []).filter((membership) => allowed.has(Number(membership.community_id))),
+    }));
+  const evidence = (payload.evidence || []).filter((item) => allowed.has(Number(item.community_id)) || allowedUserIds.has(Number(item.user_id)));
+  const ragSources = (payload.ragSources || []).filter(
+    (item) => allowed.has(Number(item.community_id)) || allowedUserIds.has(Number(item.owner_user_id))
+  );
+  const allowedSourceIds = new Set(ragSources.map((item) => Number(item.id)));
+  const ragIndexJobs = (payload.ragIndexJobs || []).filter((item) => allowedSourceIds.has(Number(item.source_id)));
+  return {
+    ...payload,
+    adminSession: session,
+    communities,
+    communityMemberships,
+    users,
+    evidence,
+    ragSources,
+    ragIndexJobs,
+    // 当前 projects/events 还没有 community_id，先保留全量管理入口；后续加字段后再按社区过滤。
+  };
+}
+
 async function adminUpdateUser(data) {
+  requireSuperAdmin(data);
   const userId = id(data.userId, "userId");
   const patch = data.patch || {};
   const userValues = {};
@@ -289,6 +508,7 @@ async function adminUpdateUser(data) {
 }
 
 async function adminDeleteUser(data) {
+  requireSuperAdmin(data);
   const userId = id(data.userId, "userId");
   await rdbUpdate("users", { status: "disabled", is_admin: 0 }, (request) => request.eq("id", userId));
   return { success: true, saved: true };
@@ -297,6 +517,7 @@ async function adminDeleteUser(data) {
 async function adminSaveUserCommunity(data) {
   const userId = id(data.userId, "userId");
   const communityId = id(data.communityId, "communityId");
+  requireCommunityAccess(data, communityId);
   const values = {
     community_id: communityId,
     user_id: userId,
@@ -315,6 +536,7 @@ async function adminSaveUserCommunity(data) {
 async function adminRevokeUserCommunity(data) {
   const userId = id(data.userId, "userId");
   const communityId = id(data.communityId, "communityId");
+  requireCommunityAccess(data, communityId);
   await rdbUpdate("community_memberships", { status: "revoked" }, (request) =>
     request.eq("community_id", communityId).eq("user_id", userId)
   );
@@ -322,6 +544,7 @@ async function adminRevokeUserCommunity(data) {
 }
 
 async function adminUpdateCommunity(data) {
+  requireSuperAdmin(data);
   const communityId = data.communityId ? id(data.communityId, "communityId") : null;
   const patch = data.patch || {};
   const values = {};
@@ -361,6 +584,146 @@ async function adminUpdateCommunity(data) {
   return { success: true, saved: true, communityId: rows[0] && rows[0].id };
 }
 
+async function adminSearchUsersForCertification(data) {
+  const communityId = id(data.communityId, "communityId");
+  requireCommunityAccess(data, communityId);
+  const keyword = text(data.keyword, 80);
+  if (!keyword) return { success: true, users: [] };
+  const users = await rdbSelect("users", "id,openid,display_name,avatar_url,status,experience_points", (request) =>
+    request.order("updated_at", { ascending: false }).limit(1000)
+  );
+  const userIds = users.map((item) => Number(item.id)).filter(Boolean);
+  const profiles = userIds.length
+    ? await rdbSelect("user_profiles", "user_id,name,job,wechat,tags_json", (request) => request.in("user_id", userIds).limit(1000)).catch(() => [])
+    : [];
+  const memberships = userIds.length
+    ? await rdbSelect("community_memberships", "user_id,community_id,status", (request) =>
+        request.in("user_id", userIds).eq("community_id", communityId).limit(1000)
+      ).catch(() => [])
+    : [];
+  const profileByUser = new Map(profiles.map((item) => [Number(item.user_id), { ...item, tags: parseJson(item.tags_json, []) }]));
+  const membershipByUser = new Map(memberships.map((item) => [Number(item.user_id), item]));
+  const normalizedKeyword = keyword.toLowerCase();
+  const matched = users
+    .map((item) => ({ ...item, profile: profileByUser.get(Number(item.id)) || null, membership: membershipByUser.get(Number(item.id)) || null }))
+    .filter((item) => {
+      const haystack = [
+        item.id,
+        item.openid,
+        item.display_name,
+        item.profile && item.profile.name,
+        item.profile && item.profile.job,
+        item.profile && item.profile.wechat,
+      ].join(" ").toLowerCase();
+      return haystack.includes(normalizedKeyword);
+    })
+    .slice(0, 20);
+  return { success: true, users: matched };
+}
+
+async function getAdminAccountCommunities(accountIds) {
+  const ids = (accountIds || []).map(Number).filter(Boolean);
+  if (!ids.length) return new Map();
+  const rows = await rdbSelect("admin_account_communities", "account_id,community_id", (request) =>
+    request.in("account_id", ids).limit(3000)
+  ).catch(() => []);
+  const map = new Map();
+  rows.forEach((row) => {
+    const key = Number(row.account_id);
+    const list = map.get(key) || [];
+    list.push(Number(row.community_id));
+    map.set(key, list);
+  });
+  return map;
+}
+
+async function findDbAdminAccount(username) {
+  const rows = await rdbSelect("admin_accounts", "*", (request) =>
+    request.eq("username", text(username, 120)).eq("status", "active").limit(1)
+  ).catch(() => []);
+  const account = rows[0];
+  if (!account) return null;
+  const communityMap = await getAdminAccountCommunities([account.id]);
+  return {
+    accountId: Number(account.id),
+    username: account.username,
+    passwordHash: account.password_hash,
+    role: account.role === "super_admin" ? "super_admin" : "community_admin",
+    communityIds: communityMap.get(Number(account.id)) || [],
+  };
+}
+
+async function listAdminAccounts(data) {
+  requireSuperAdmin(data);
+  const rows = await rdbSelect("admin_accounts", "id,username,role,status,display_name,created_at,updated_at", (request) =>
+    request.order("created_at", { ascending: false }).limit(300)
+  ).catch(() => []);
+  const communityMap = await getAdminAccountCommunities(rows.map((row) => row.id));
+  return rows.map((row) => ({
+    ...row,
+    communityIds: communityMap.get(Number(row.id)) || [],
+  }));
+}
+
+async function adminUpsertAdminAccount(data) {
+  requireSuperAdmin(data);
+  const accountId = data.accountId ? id(data.accountId, "accountId") : null;
+  const patch = data.patch || {};
+  const username = text(patch.username, 120);
+  const role = patch.role === "super_admin" ? "super_admin" : "community_admin";
+  const status = patch.status === "disabled" ? "disabled" : "active";
+  const communityIds = Array.isArray(patch.communityIds) ? patch.communityIds.map(Number).filter(Boolean) : [];
+  if (!accountId && !username) {
+    const error = new Error("账号不能为空");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+  if (role === "community_admin" && !communityIds.length) {
+    const error = new Error("社区管理员至少要绑定一个社区");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+  const values = {
+    role,
+    status,
+    display_name: text(patch.displayName || patch.username, 120),
+  };
+  if (username) values.username = username;
+  if (patch.password) values.password_hash = hashPassword(patch.password);
+  if (!accountId && !values.password_hash) {
+    const error = new Error("新建管理员需要设置密码");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+
+  let savedAccountId = accountId;
+  if (accountId) {
+    await rdbUpdate("admin_accounts", values, (request) => request.eq("id", accountId));
+  } else {
+    await rdbInsert("admin_accounts", values);
+    const rows = await rdbSelect("admin_accounts", "id", (request) =>
+      request.eq("username", username).order("created_at", { ascending: false }).limit(1)
+    );
+    savedAccountId = Number(rows[0] && rows[0].id);
+  }
+  if (!savedAccountId) throw Object.assign(new Error("管理员账号保存失败"), { code: "SAVE_FAILED" });
+
+  await rdbDelete("admin_account_communities", (request) => request.eq("account_id", savedAccountId));
+  if (role === "community_admin") {
+    for (const communityId of communityIds) {
+      await rdbInsert("admin_account_communities", { account_id: savedAccountId, community_id: communityId });
+    }
+  }
+  return { success: true, saved: true, accountId: savedAccountId };
+}
+
+async function adminDeleteAdminAccount(data) {
+  requireSuperAdmin(data);
+  const accountId = id(data.accountId, "accountId");
+  await rdbUpdate("admin_accounts", { status: "disabled" }, (request) => request.eq("id", accountId));
+  return { success: true, saved: true };
+}
+
 async function saveCoverAfterBusiness(data, result) {
   if (!result || !result.success) return result;
   if (data.action === "adminUpdateProject" && data.patch && data.patch.coverUrl !== undefined) {
@@ -373,10 +736,24 @@ async function saveCoverAfterBusiness(data, result) {
 }
 
 async function adminProxyAction(data) {
+  const session = sessionFromData(data);
   if (data.action === "adminList") {
     const result = await callBusiness(businessData(data));
     if (!result || !result.success) return result;
-    return enrichAdminList(result);
+    const enriched = await enrichAdminList(result);
+    if (session && session.role === "super_admin") {
+      enriched.adminAccounts = await listAdminAccounts(data);
+    }
+    return applyAdminScope(enriched, session);
+  }
+  if (data.action === "adminSearchUsersForCertification") {
+    await assertAdmin(data);
+    return adminSearchUsersForCertification(data);
+  }
+  if (data.action === "adminUpsertAdminAccount" || data.action === "adminDeleteAdminAccount") {
+    await assertAdmin(data);
+    if (data.action === "adminDeleteAdminAccount") return adminDeleteAdminAccount(data);
+    return adminUpsertAdminAccount(data);
   }
   if (["adminUpdateUser", "adminDeleteUser", "adminSaveUserCommunity", "adminRevokeUserCommunity", "adminUpdateCommunity"].includes(data.action)) {
     await assertAdmin(data);
@@ -386,45 +763,79 @@ async function adminProxyAction(data) {
     if (data.action === "adminRevokeUserCommunity") return adminRevokeUserCommunity(data);
     return adminSaveUserCommunity(data);
   }
+  await assertScopedBusinessAction(data);
   const result = await callBusiness(businessData(data));
   return saveCoverAfterBusiness(data, result);
 }
 
-function login(data) {
-  if (!adminPassword) {
-    const error = new Error("服务器未配置 ADMIN_WEB_PASSWORD");
-    error.code = "LOGIN_NOT_CONFIGURED";
-    throw error;
+async function login(data) {
+  const username = String(data.username || "");
+  const password = String(data.password || "");
+  const superAccount = { username: superUsername, password: superPassword, role: "super_admin", communityIds: [] };
+  let account = null;
+  if (superPassword && username === superAccount.username && password === superAccount.password) {
+    account = superAccount;
   }
-  if (String(data.username || "") !== adminUsername || String(data.password || "") !== adminPassword) {
+  if (!account) {
+    const dbAccount = await findDbAdminAccount(username);
+    if (dbAccount && verifyPassword(password, dbAccount.passwordHash)) account = dbAccount;
+  }
+  if (!account) {
+    account = communityAccounts.find((item) => item.username === username && item.password === password);
+  }
+  if (!superPassword && !communityAccounts.length) {
+    const dbAccount = await findDbAdminAccount(username);
+    if (!dbAccount) {
+      const error = new Error("服务器未配置超级管理员密码，且未找到数据库管理员账号");
+      error.code = "LOGIN_NOT_CONFIGURED";
+      throw error;
+    }
+  }
+  if (!account) {
     const error = new Error("账号或密码不正确");
     error.code = "LOGIN_FAILED";
     throw error;
   }
+  if (account.role === "community_admin" && !account.communityIds.length) {
+    const error = new Error("该社区管理员没有绑定社区");
+    error.code = "LOGIN_NOT_CONFIGURED";
+    throw error;
+  }
   return {
     success: true,
-    sessionToken: createSessionToken(adminUsername),
+    sessionToken: createSessionToken(account),
+    role: account.role,
+    communityIds: account.communityIds || [],
     expiresInSeconds: 12 * 60 * 60,
   };
 }
 
 async function adminUploadAsset(data) {
   await assertAdmin(data);
-  const match = String(data.dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) {
-    const error = new Error("上传内容格式不正确");
-    error.code = "VALIDATION_ERROR";
-    throw error;
+  let contentType = data.contentType;
+  let fileContent = data.fileContent;
+  if (!fileContent) {
+    const match = String(data.dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) {
+      const error = new Error("上传内容格式不正确");
+      error.code = "VALIDATION_ERROR";
+      throw error;
+    }
+    contentType = match[1];
+    fileContent = Buffer.from(match[2], "base64");
   }
-  const contentType = match[1];
   if (!/^image\/(png|jpe?g|webp)$/.test(contentType)) {
     const error = new Error("只支持 png、jpg、webp 图片");
     error.code = "VALIDATION_ERROR";
     throw error;
   }
-  const fileContent = Buffer.from(match[2], "base64");
-  if (fileContent.length > 5 * 1024 * 1024) {
-    const error = new Error("图片不能超过 5MB");
+  if (!Buffer.isBuffer(fileContent) || !fileContent.length) {
+    const error = new Error("图片内容为空");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+  if (fileContent.length > 8 * 1024 * 1024) {
+    const error = new Error("图片不能超过 8MB");
     error.code = "VALIDATION_ERROR";
     throw error;
   }
@@ -446,10 +857,23 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "POST" && request.url === "/api/login") {
       const data = await readJson(request);
-      return sendJson(response, 200, login(data));
+      return sendJson(response, 200, await login(data));
     }
-    if (request.method === "POST" && request.url === "/api/upload") {
-      const data = await readJson(request);
+    const url = new URL(request.url, `http://${request.headers.host || host}`);
+    if (request.method === "POST" && url.pathname === "/api/upload") {
+      const contentType = String(request.headers["content-type"] || "");
+      let data;
+      if (contentType.startsWith("application/json")) {
+        data = await readJson(request);
+      } else {
+        data = {
+          adminSessionToken: request.headers["x-admin-session-token"],
+          kind: url.searchParams.get("kind"),
+          filename: url.searchParams.get("filename") || request.headers["x-filename"],
+          contentType,
+          fileContent: await readBuffer(request),
+        };
+      }
       const result = await adminUploadAsset(data);
       return sendJson(response, 200, result);
     }

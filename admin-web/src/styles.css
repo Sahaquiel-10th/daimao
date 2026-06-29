@@ -206,6 +206,19 @@ th {
   font-weight: 950;
 }
 
+.role-pill {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 8px;
+  padding: 5px 10px;
+  border: 2px solid #23211f;
+  border-radius: 999px;
+  background: #fff0b8;
+  box-shadow: 2px 2px 0 #23211f;
+  font-size: 12px;
+  font-weight: 950;
+}
+
 .eyebrow {
   margin: 0;
   color: #8b8178;
@@ -514,6 +527,46 @@ th {
   font-size: 12px;
 }
 
+.evidence-list {
+  display: grid;
+  gap: 10px;
+}
+
+.evidence-item {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 2px solid #23211f;
+  border-radius: 12px;
+  background: #fffdfa;
+}
+
+.evidence-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: #6f6a63;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.evidence-content {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #342f2a;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -562,6 +615,32 @@ th {
   align-items: end;
 }
 
+.candidate-list {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 2px solid #ede5da;
+  background: #fff8e8;
+}
+
+.candidate-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 2px solid #23211f;
+  border-radius: 12px;
+  background: #fffdfa;
+}
+
+.form-error {
+  margin: 8px 16px;
+  color: #a83220;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .member-list {
   display: grid;
   gap: 10px;
@@ -603,6 +682,16 @@ th {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.checkbox-grid {
+  display: grid;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.checkbox-grid .check-row {
+  justify-content: flex-start;
 }
 
 .check-row input {
