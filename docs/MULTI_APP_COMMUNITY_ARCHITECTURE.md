@@ -97,6 +97,7 @@ C 社区小程序 ┘                         ├─ ReAI RAG
 - `app_clients` 表。
 - 现有小程序登录时自动补 `user_identities`。
 - 保留 `users.openid` 兼容现有数据。
+- 当前小程序源码已通过 `wx.cloud.Cloud({ resourceAppid, resourceEnv })` 指向呆猫中心资源环境，适合短期把源码交给其他社区改皮肤和 UI 后复用。
 
 未落地，后续要做：
 
@@ -105,3 +106,7 @@ C 社区小程序 ┘                         ├─ ReAI RAG
 - `wx.login code -> openid/unionid` 服务端换取。
 - 请求签名和 nonce 防重放。
 - 用户合并后台。
+
+如果某个跨主体小程序无法被授权访问呆猫中心 CloudBase 资源环境，不要让它直连云函数；改走标准 HTTPS 中心 API。数据库和身份映射设计不需要推倒重来。
+
+详细交接文档见 [PARTNER_MINIPROGRAM_HANDOFF.md](/Users/machao/Desktop/I%20have%20a%20呆猫/docs/PARTNER_MINIPROGRAM_HANDOFF.md)。

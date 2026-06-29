@@ -1028,8 +1028,8 @@ async function upsertRagSourceForCurrentDriver(source) {
 async function currentUser(event = {}) {
   const context = cloud.getWXContext();
   const openid = context.FROM_OPENID || context.OPENID;
-  const unionid = context.UNIONID || "";
-  const sourceAppid = context.APPID || context.FROM_APPID || process.env.WX_APPID || "cloudbase-default";
+  const unionid = context.FROM_UNIONID || context.UNIONID || "";
+  const sourceAppid = context.FROM_APPID || context.APPID || process.env.WX_APPID || "cloudbase-default";
   if (event.adminWebToken) {
     if (!process.env.ADMIN_WEB_TOKEN || event.adminWebToken !== process.env.ADMIN_WEB_TOKEN) {
       throw codedError("FORBIDDEN", "管理员网页令牌不正确");
