@@ -337,6 +337,33 @@ TENCENTCLOUD_SECRETKEY
 3. 找不到时兼容旧的 `users.openid`。
 4. 必要时自动创建 `users` 和 `user_identities`。
 
+### 公开用户 ID 与终身引荐绑定
+
+后台和社区运营使用 `users.public_user_code` 作为可读用户 ID，例如 `001`、`002`。这个 ID 默认按 `users.id` 自动补齐生成，超级管理员可以在后台修改，保存时会查重，避免两个用户共用同一个公开 ID。
+
+注意：公开 ID 是运营识别码，不是底层主键。系统内部关联仍以 `users.id` 为准，避免改运营 ID 时破坏项目、社区、证据链、引荐关系等历史数据。
+
+终身推荐关系保存在 `user_referrals`：
+
+- `referred_user_id`：被推荐进入体系的人。
+- `referrer_user_id`：推荐人。
+- `community_id`：记录这次绑定发生或由哪个社区管理员维护，可为空表示平台级绑定。
+- `status`：`active` 当前有效、`replaced` 被新绑定替换、`revoked` 已解除。
+- `note`：运营备注。
+
+权限规则：
+
+- 普通用户不能查看或编辑绑定关系。
+- 社区管理员可以维护自己社区成员的引荐绑定。
+- 超级管理员可以维护全部绑定，并可以修改公开用户 ID。
+- 分成比例暂不写死在这里。后续不同项目有不同分成时，应在结算/订单表里按项目记录比例，`user_referrals` 只负责“谁引荐谁”的长期关系。
+
+上线前需要执行迁移：
+
+```text
+database/migrations/2026-06-29-user-referrals.sql
+```
+
 ## 社区数据边界
 
 社区相关数据都要通过 `community_id` 做边界：
@@ -378,4 +405,3 @@ TENCENTCLOUD_SECRETKEY
 - 可以调用的 `action` 清单。
 - 自己小程序的 AppID 配置方式。
 - UI 和业务展示规则。
-

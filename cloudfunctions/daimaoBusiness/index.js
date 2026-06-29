@@ -144,6 +144,20 @@ async function rdbUpsert(table, values, options) {
   return result.data || [];
 }
 
+function defaultPublicUserCode(userId) {
+  const value = Number(userId || 0);
+  if (!value) return "";
+  return String(value).padStart(3, "0");
+}
+
+async function ensurePublicUserCode(user) {
+  if (!useRdb() || !user || !user.id || user.public_user_code) return user;
+  const publicUserCode = defaultPublicUserCode(user.id);
+  if (!publicUserCode) return user;
+  await rdbUpdate("users", { public_user_code: publicUserCode }, (request) => request.eq("id", user.id)).catch(() => {});
+  return { ...user, public_user_code: publicUserCode };
+}
+
 function text(value, max = 5000) {
   return String(value || "").trim().slice(0, max);
 }
@@ -1064,7 +1078,7 @@ async function currentUser(event = {}) {
         (request) => request.eq("id", identityRows[0].id)
       ).catch(() => {});
       if (displayName) await rdbUpdate("users", { display_name: displayName }, (request) => request.eq("id", identityRows[0].user_id));
-      const user = (await rdbSelect("users", "*", (request) => request.eq("id", identityRows[0].user_id).limit(1)))[0];
+      const user = await ensurePublicUserCode((await rdbSelect("users", "*", (request) => request.eq("id", identityRows[0].user_id).limit(1)))[0]);
       if (!user || user.status !== "active") throw codedError("USER_DISABLED", "当前账号不可用");
       return user;
     }
@@ -1076,6 +1090,7 @@ async function currentUser(event = {}) {
       const inserted = await rdbInsert("users", { openid, unionid, display_name: displayName });
       user = Array.isArray(inserted) && inserted[0] ? inserted[0] : (await rdbSelect("users", "*", (request) => request.eq("openid", openid).limit(1)))[0];
     }
+    user = await ensurePublicUserCode(user);
     if (user) {
       await rdbInsert("user_identities", {
         user_id: user.id,
@@ -2532,7 +2547,7 @@ async function adminList(event, user) {
   await requireAdmin(user);
   if (useRdb()) {
     const [users, projects, applications, events, registrations, records, files, jobs, memories, evidence, requests, logs, adminLogs, ragSources, ragChunks, ragJobs] = await Promise.all([
-      rdbSelect("users", "id,openid,display_name,avatar_url,status,is_admin,experience_points,created_at,updated_at", (request) => request.order("created_at", { ascending: false }).limit(100)),
+      rdbSelect("users", "id,openid,public_user_code,display_name,avatar_url,status,is_admin,experience_points,created_at,updated_at", (request) => request.order("created_at", { ascending: false }).limit(100)),
       rdbSelect("projects", "*", (request) => request.order("updated_at", { ascending: false }).limit(100)),
       rdbSelect("project_applications", "*", (request) => request.order("created_at", { ascending: false }).limit(200)).catch(() => []),
       rdbSelect("official_events", "*", (request) => request.order("start_time", { ascending: false }).limit(100)),
@@ -3294,19 +3309,19 @@ async function adminListUsers(event, user) {
   const limit = Math.min(Math.max(Number(event.limit || 100), 1), 300);
   const keyword = text(event.keyword, 80);
   if (useRdb()) {
-    const rows = await rdbSelect("users", "id,openid,display_name,avatar_url,status,is_admin,experience_points,created_at,updated_at", (request) =>
+    const rows = await rdbSelect("users", "id,openid,public_user_code,display_name,avatar_url,status,is_admin,experience_points,created_at,updated_at", (request) =>
       request.order("created_at", { ascending: false }).limit(limit)
     );
     const users = keyword
-      ? rows.filter((item) => [item.display_name, item.openid].some((value) => String(value || "").includes(keyword)))
+      ? rows.filter((item) => [item.display_name, item.openid, item.public_user_code].some((value) => String(value || "").includes(keyword)))
       : rows;
     return { users };
   }
   const users = await query(
-    "SELECT id,openid,display_name,avatar_url,status,is_admin,experience_points,created_at,updated_at FROM users ORDER BY created_at DESC LIMIT ?",
+    "SELECT id,openid,public_user_code,display_name,avatar_url,status,is_admin,experience_points,created_at,updated_at FROM users ORDER BY created_at DESC LIMIT ?",
     [limit]
   );
-  return { users: keyword ? users.filter((item) => [item.display_name, item.openid].some((value) => String(value || "").includes(keyword))) : users };
+  return { users: keyword ? users.filter((item) => [item.display_name, item.openid, item.public_user_code].some((value) => String(value || "").includes(keyword))) : users };
 }
 
 async function adminSetUserStatus(event, user) {

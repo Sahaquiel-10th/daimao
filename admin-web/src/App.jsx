@@ -211,6 +211,7 @@ function userDraftFrom(user) {
   const profile = user?.profile || {};
   return {
     id: user?.id,
+    publicUserCode: user?.public_user_code || "",
     displayName: user?.display_name || "",
     avatarUrl: user?.avatar_url || profile.avatar_url || "",
     status: user?.status || "active",
@@ -221,6 +222,8 @@ function userDraftFrom(user) {
     wechat: profile.wechat || "",
     intro: profile.intro || "",
     profileTags: (profile.tags || []).join(" "),
+    referrerUserCode: user?.referral?.referrer_public_user_code || "",
+    referralNote: user?.referral?.note || "",
   };
 }
 
@@ -352,7 +355,16 @@ export default function App() {
   }, [data]);
 
   const filteredUsers = (data?.users || []).filter((item) =>
-    [item.display_name, item.openid, item.id, item.profile?.name, item.profile?.job].some((value) => String(value || "").includes(query))
+    [
+      item.display_name,
+      item.openid,
+      item.public_user_code,
+      item.id,
+      item.profile?.name,
+      item.profile?.job,
+      item.referral?.referrer_public_user_code,
+      item.referral?.referrer_display_name,
+    ].some((value) => String(value || "").includes(query))
   );
   const filteredProjects = (data?.projects || []).filter((item) =>
     [item.name, item.status, item.visibility, item.stage].some((value) => String(value || "").includes(query))
@@ -650,6 +662,7 @@ export default function App() {
               user={selectedUser}
               communities={data?.communities || []}
               evidence={selectedUserEvidence}
+              isSuperAdmin={isSuperAdmin}
               onChange={setUserDraft}
               onUploadAvatar={(file) => upload("user-avatar", file, (fileID) => setUserDraft((draft) => ({ ...draft, avatarUrl: fileID })))}
               onSubmit={() =>
@@ -674,6 +687,14 @@ export default function App() {
                   userId: userDraft.id,
                   communityId,
                 }, "社区认证已撤销")
+              }
+              onSaveReferral={(form) =>
+                userDraft?.id &&
+                run("adminSetUserReferral", {
+                  userId: userDraft.id,
+                  referrerUserCode: form.referrerUserCode,
+                  note: form.note,
+                }, form.referrerUserCode ? "引荐绑定已保存" : "引荐绑定已解除")
               }
               onDelete={() => {
                 if (!userDraft) return;
@@ -936,6 +957,8 @@ function UserTable({ users, onEdit }) {
       <thead>
         <tr>
           <th>用户</th>
+          <th>用户ID</th>
+          <th>引荐人</th>
           <th>社区徽章</th>
           <th>经验</th>
           <th>状态</th>
@@ -955,6 +978,12 @@ function UserTable({ users, onEdit }) {
                 </div>
               </div>
             </td>
+            <td><code>{user.public_user_code || String(user.id || "").padStart(3, "0")}</code></td>
+            <td>
+              {user.referral ? (
+                <span>{user.referral.referrer_display_name || user.referral.referrer_profile_name || "未命名"} · {user.referral.referrer_public_user_code || user.referral.referrer_user_id}</span>
+              ) : <span className="muted">未绑定</span>}
+            </td>
             <td>
               <div className="badge-row">
                 {(user.communities || []).slice(0, 3).map((item) => (
@@ -968,7 +997,7 @@ function UserTable({ users, onEdit }) {
             <td><button onClick={() => onEdit(user)}>编辑</button></td>
           </tr>
         )) : (
-          <tr><td colSpan="6"><EmptyState title="暂无用户">换个关键词试试，或等待用户注册后再管理。</EmptyState></td></tr>
+          <tr><td colSpan="8"><EmptyState title="暂无用户">换个关键词试试，或等待用户注册后再管理。</EmptyState></td></tr>
         )}
       </tbody>
     </table>
@@ -989,7 +1018,22 @@ function Modal({ title, children, onClose }) {
   );
 }
 
-function UserEditor({ draft, user, communities, evidence, onChange, onUploadAvatar, onSubmit, onSaveCommunity, onRevokeCommunity, onDelete, onSaveEvidence, onArchiveEvidence }) {
+function UserEditor({
+  draft,
+  user,
+  communities,
+  evidence,
+  isSuperAdmin,
+  onChange,
+  onUploadAvatar,
+  onSubmit,
+  onSaveCommunity,
+  onRevokeCommunity,
+  onSaveReferral,
+  onDelete,
+  onSaveEvidence,
+  onArchiveEvidence,
+}) {
   const [communityForm, setCommunityForm] = useState({ communityId: "", tagsText: "" });
   const [editingEvidenceId, setEditingEvidenceId] = useState(null);
   const [evidenceDraft, setEvidenceDraft] = useState(null);
@@ -1006,6 +1050,17 @@ function UserEditor({ draft, user, communities, evidence, onChange, onUploadAvat
       <div className="editor-title">
         <button className="danger-button" onClick={onDelete}><Trash2 size={15} />删除</button>
       </div>
+      <Field label="用户ID">
+        <input
+          value={draft.publicUserCode || ""}
+          disabled={!isSuperAdmin}
+          onChange={(event) => onChange({ ...draft, publicUserCode: event.target.value })}
+          placeholder="如 001"
+        />
+        <p className="muted small-muted">
+          {isSuperAdmin ? "默认自动生成，修改时会查重。" : "只有超级管理员可以修改用户ID。"}
+        </p>
+      </Field>
       <Field label="展示名">
         <input value={draft.displayName} onChange={(event) => onChange({ ...draft, displayName: event.target.value })} />
       </Field>
@@ -1041,6 +1096,37 @@ function UserEditor({ draft, user, communities, evidence, onChange, onUploadAvat
         <textarea value={draft.intro} onChange={(event) => onChange({ ...draft, intro: event.target.value })} />
       </Field>
       <button className="primary-button" onClick={onSubmit}>保存用户资料</button>
+      <div className="editor-divider" />
+      <section className="embedded-section">
+        <h4>终身引荐绑定</h4>
+        <p className="muted small-muted">
+          当前引荐人：{user?.referral ? `${user.referral.referrer_display_name || user.referral.referrer_profile_name || "未命名"}（${user.referral.referrer_public_user_code || user.referral.referrer_user_id}）` : "未绑定"}
+        </p>
+        <Field label="引荐人用户ID">
+          <input
+            value={draft.referrerUserCode || ""}
+            onChange={(event) => onChange({ ...draft, referrerUserCode: event.target.value })}
+            placeholder="输入引荐人的用户ID，如 001"
+          />
+        </Field>
+        <Field label="绑定备注">
+          <input
+            value={draft.referralNote || ""}
+            onChange={(event) => onChange({ ...draft, referralNote: event.target.value })}
+            placeholder="可记录来源活动、推荐说明等"
+          />
+        </Field>
+        <div className="inline-actions">
+          <button type="button" onClick={() => onSaveReferral({ referrerUserCode: draft.referrerUserCode, note: draft.referralNote })}>保存绑定</button>
+          <button
+            type="button"
+            className="danger-button"
+            onClick={() => onSaveReferral({ referrerUserCode: "", note: draft.referralNote || "后台解除绑定" })}
+          >
+            解除绑定
+          </button>
+        </div>
+      </section>
       <div className="editor-divider" />
       <section className="embedded-section">
         <h4>社区认证</h4>
@@ -1353,7 +1439,7 @@ function CommunityMembers({ community, members, onCertify, onRevoke, onCreateEvi
   const activeIds = new Set(members.map((item) => Number(item.id)));
   async function searchUsers() {
     if (!keyword.trim()) {
-      setSearchError("请输入姓名、微信号、openid 或用户 ID");
+      setSearchError("请输入姓名、微信号、openid 或用户ID");
       return;
     }
     setSearching(true);
@@ -1375,7 +1461,7 @@ function CommunityMembers({ community, members, onCertify, onRevoke, onCreateEvi
       <h3>{community.name} · 成员</h3>
       <div className="member-tools">
         <Field label="搜索用户">
-          <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="姓名 / 微信号 / openid / 用户ID" onKeyDown={(event) => event.key === "Enter" && searchUsers()} />
+          <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="姓名 / 微信号 / 公开用户ID / openid" onKeyDown={(event) => event.key === "Enter" && searchUsers()} />
         </Field>
         <Field label="社区标签">
           <input value={form.tagsText} onChange={(event) => setForm({ ...form, tagsText: event.target.value })} placeholder="如 技术验证 项目推进" />
@@ -1392,7 +1478,7 @@ function CommunityMembers({ community, members, onCertify, onRevoke, onCreateEvi
               <div className="candidate-card" key={item.id}>
                 <div className="title-stack">
                   <strong>{name}</strong>
-                  <span>ID {item.id} · {item.profile?.job || item.profile?.wechat || item.openid || "暂无资料"}</span>
+                  <span>ID {item.public_user_code || String(item.id || "").padStart(3, "0")} · {item.profile?.job || item.profile?.wechat || item.openid || "暂无资料"}</span>
                 </div>
                 <button
                   type="button"

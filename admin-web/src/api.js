@@ -233,9 +233,9 @@ function errorMessage(err) {
 const now = new Date().toISOString();
 const mockState = {
   users: [
-    { id: 1, openid: "demo_admin_daimao", display_name: "呆猫主理人", status: "active", is_admin: 1, experience_points: 180, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["主理人"], communityName: "OPC 共创营", badgeName: "OPC" }] },
-    { id: 2, openid: "demo_operator_ai", display_name: "阿里 AI 产品顾问", status: "active", is_admin: 0, experience_points: 76, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["AI"], communityName: "OPC 共创营", badgeName: "OPC" }] },
-    { id: 3, openid: "demo_sales_growth", display_name: "增长销售合伙人", status: "disabled", is_admin: 0, experience_points: 63, created_at: now },
+    { id: 1, public_user_code: "001", openid: "demo_admin_daimao", display_name: "呆猫主理人", status: "active", is_admin: 1, experience_points: 180, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["主理人"], communityName: "OPC 共创营", badgeName: "OPC" }] },
+    { id: 2, public_user_code: "002", openid: "demo_operator_ai", display_name: "阿里 AI 产品顾问", status: "active", is_admin: 0, experience_points: 76, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["AI"], communityName: "OPC 共创营", badgeName: "OPC" }], referral: { referrer_user_id: 1, referrer_public_user_code: "001", referrer_display_name: "呆猫主理人", note: "测试引荐" } },
+    { id: 3, public_user_code: "003", openid: "demo_sales_growth", display_name: "增长销售合伙人", status: "disabled", is_admin: 0, experience_points: 63, created_at: now },
   ],
   communities: [
     { id: 1, name: "OPC 共创营", badge_name: "OPC", description: "务实接单、项目共创", logo_url: "", certification_method: "manual_review", status: "active", sort_weight: 100 },
@@ -268,7 +268,16 @@ async function mockCall(action, data) {
   await new Promise((resolve) => setTimeout(resolve, 180));
   if (action === "adminList") return { success: true, adminSession: { role: "super_admin", communityIds: [] }, ...mockState };
   if (action === "adminUpdateUser") {
-    mockState.users = mockState.users.map((item) => item.id === data.userId ? { ...item, display_name: data.patch?.displayName ?? item.display_name, status: data.patch?.status ?? item.status, experience_points: data.patch?.experiencePoints ?? item.experience_points } : item);
+    mockState.users = mockState.users.map((item) => item.id === data.userId ? { ...item, public_user_code: data.patch?.publicUserCode ?? item.public_user_code, display_name: data.patch?.displayName ?? item.display_name, status: data.patch?.status ?? item.status, experience_points: data.patch?.experiencePoints ?? item.experience_points } : item);
+    return { success: true, saved: true };
+  }
+  if (action === "adminSetUserReferral") {
+    const referrer = mockState.users.find((item) => item.public_user_code === data.referrerUserCode || String(item.id) === String(data.referrerUserCode));
+    mockState.users = mockState.users.map((item) => {
+      if (item.id !== data.userId) return item;
+      if (!data.referrerUserCode) return { ...item, referral: null };
+      return { ...item, referral: { referrer_user_id: referrer?.id, referrer_public_user_code: referrer?.public_user_code || data.referrerUserCode, referrer_display_name: referrer?.display_name || "", note: data.note || "" } };
+    });
     return { success: true, saved: true };
   }
   if (action === "adminDeleteUser") {

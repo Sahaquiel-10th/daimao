@@ -107,6 +107,20 @@ function splitChunks(content, maxLength = 900) {
   });
 }
 
+function defaultPublicUserCode(userId) {
+  const value = Number(userId || 0);
+  if (!value) return "";
+  return String(value).padStart(3, "0");
+}
+
+async function ensurePublicUserCode(user) {
+  if (!SQL_SYNC_ENABLED || !user || !user.id || user.public_user_code) return user;
+  const publicUserCode = defaultPublicUserCode(user.id);
+  if (!publicUserCode) return user;
+  await rdbUpdate("users", { public_user_code: publicUserCode }, (request) => request.eq("id", user.id)).catch(() => {});
+  return { ...user, public_user_code: publicUserCode };
+}
+
 function detectPolarity(content) {
   const text = String(content || "");
   if (/不擅长|不适合|不会|不能|缺少|短板|避免|拒绝|不希望/.test(text)) return "negative";
@@ -129,7 +143,7 @@ async function ensureSqlUser(openid, profile = {}) {
       (request) => request.eq("id", existing[0].id)
     );
     const rows = await rdbSelect("users", "*", (request) => request.eq("openid", userId).limit(1));
-    return rows[0] || existing[0];
+    return ensurePublicUserCode(rows[0] || existing[0]);
   }
   await rdbInsert("users", {
     openid: userId,
@@ -140,7 +154,7 @@ async function ensureSqlUser(openid, profile = {}) {
     experience_points: 0,
   });
   const rows = await rdbSelect("users", "*", (request) => request.eq("openid", userId).limit(1));
-  return rows[0] || null;
+  return ensurePublicUserCode(rows[0] || null);
 }
 
 function buildProfileRagContent(profile) {

@@ -232,6 +232,10 @@ function text(value, max = 5000) {
   return String(value || "").trim().slice(0, max);
 }
 
+function normalizePublicUserCode(value) {
+  return text(value, 32).replace(/\s+/g, "");
+}
+
 function parseJson(value, fallback = []) {
   if (value === null || value === undefined || value === "") return fallback;
   if (typeof value !== "string") return value;
@@ -451,16 +455,24 @@ function businessData(data) {
 
 async function enrichAdminList(payload) {
   const userIds = (payload.users || []).map((item) => Number(item.id)).filter(Boolean);
-  const [communities, memberships, profiles, projectMembers, projectRecords, experienceEvents] = await Promise.all([
+  const [communities, memberships, profiles, projectMembers, projectRecords, experienceEvents, referrals] = await Promise.all([
     rdbSelect("communities", "*", (request) => request.order("sort_weight", { ascending: false }).limit(300)).catch(() => []),
     userIds.length ? rdbSelect("community_memberships", "*", (request) => request.in("user_id", userIds).limit(3000)).catch(() => []) : [],
     userIds.length ? rdbSelect("user_profiles", "*", (request) => request.in("user_id", userIds).limit(3000)).catch(() => []) : [],
     userIds.length ? rdbSelect("project_members", "*", (request) => request.in("user_id", userIds).limit(3000)).catch(() => []) : [],
     userIds.length ? rdbSelect("project_records", "id,project_id,uploader_user_id,title,record_type,visibility,ai_process_status,created_at", (request) => request.in("uploader_user_id", userIds).order("created_at", { ascending: false }).limit(500)).catch(() => []) : [],
     userIds.length ? rdbSelect("user_experience_events", "*", (request) => request.in("user_id", userIds).order("created_at", { ascending: false }).limit(500)).catch(() => []) : [],
+    userIds.length ? rdbSelect("user_referrals", "*", (request) => request.in("referred_user_id", userIds).eq("status", "active").limit(3000)).catch(() => []) : [],
+  ]);
+  const referrerIds = [...new Set(referrals.map((item) => Number(item.referrer_user_id)).filter(Boolean))];
+  const [referrerUsers, referrerProfiles] = await Promise.all([
+    referrerIds.length ? rdbSelect("users", "id,openid,public_user_code,display_name,status", (request) => request.in("id", referrerIds).limit(3000)).catch(() => []) : [],
+    referrerIds.length ? rdbSelect("user_profiles", "user_id,name,job,wechat", (request) => request.in("user_id", referrerIds).limit(3000)).catch(() => []) : [],
   ]);
   const communityMap = new Map(communities.map((item) => [Number(item.id), item]));
   const profilesByUser = new Map(profiles.map((item) => [Number(item.user_id), { ...item, tags: parseJson(item.tags_json, []), answers: parseJson(item.answers_json, []) }]));
+  const referrerUserMap = new Map(referrerUsers.map((item) => [Number(item.id), item]));
+  const referrerProfileMap = new Map(referrerProfiles.map((item) => [Number(item.user_id), item]));
   const membershipsByUser = new Map();
   memberships.forEach((item) => {
     const list = membershipsByUser.get(Number(item.user_id)) || [];
@@ -474,10 +486,23 @@ async function enrichAdminList(payload) {
     });
     membershipsByUser.set(Number(item.user_id), list);
   });
+  const referralByUser = new Map();
+  referrals.forEach((item) => {
+    const referrer = referrerUserMap.get(Number(item.referrer_user_id)) || {};
+    const profile = referrerProfileMap.get(Number(item.referrer_user_id)) || {};
+    referralByUser.set(Number(item.referred_user_id), {
+      ...item,
+      referrer_public_user_code: referrer.public_user_code || "",
+      referrer_display_name: referrer.display_name || profile.name || "",
+      referrer_profile_name: profile.name || "",
+      referrer_job: profile.job || "",
+    });
+  });
   const enriched = {
     ...payload,
     communities,
     communityMemberships: memberships,
+    referrals,
     userProfiles: profiles,
     projectMembers,
     projectRecords,
@@ -486,6 +511,7 @@ async function enrichAdminList(payload) {
       ...item,
       profile: profilesByUser.get(Number(item.id)) || null,
       communities: membershipsByUser.get(Number(item.id)) || [],
+      referral: referralByUser.get(Number(item.id)) || null,
     })),
   };
   return addAssetDisplayUrls(enriched);
@@ -551,6 +577,9 @@ function applyAdminScope(payload, session) {
   const allowedProjectIds = new Set(projects.map((item) => Number(item.id)));
   const projectApplications = (payload.projectApplications || []).filter((item) => allowedProjectIds.has(Number(item.project_id)));
   const events = (payload.events || []).filter((item) => allowed.has(Number(item.community_id)));
+  const referrals = (payload.referrals || []).filter(
+    (item) => allowedUserIds.has(Number(item.referred_user_id)) || allowedUserIds.has(Number(item.referrer_user_id))
+  );
   return {
     ...payload,
     adminSession: session,
@@ -560,6 +589,7 @@ function applyAdminScope(payload, session) {
     projects,
     projectApplications,
     events,
+    referrals,
     evidence,
     ragSources,
     ragIndexJobs,
@@ -572,6 +602,21 @@ async function adminUpdateUser(data) {
   const userId = id(data.userId, "userId");
   const patch = data.patch || {};
   const userValues = {};
+  if (patch.publicUserCode !== undefined) {
+    const code = normalizePublicUserCode(patch.publicUserCode);
+    if (!code) {
+      const error = new Error("用户ID不能为空");
+      error.code = "VALIDATION_ERROR";
+      throw error;
+    }
+    const duplicate = await rdbSelect("users", "id", (request) => request.eq("public_user_code", code).limit(1)).catch(() => []);
+    if (duplicate[0] && Number(duplicate[0].id) !== Number(userId)) {
+      const error = new Error("这个用户ID已被占用");
+      error.code = "VALIDATION_ERROR";
+      throw error;
+    }
+    userValues.public_user_code = code;
+  }
   if (patch.displayName !== undefined) userValues.display_name = text(patch.displayName, 120);
   if (patch.avatarUrl !== undefined) userValues.avatar_url = text(patch.avatarUrl, 1000);
   if (patch.status !== undefined) userValues.status = patch.status === "disabled" ? "disabled" : "active";
@@ -592,6 +637,98 @@ async function adminUpdateUser(data) {
   }
 
   return { success: true, saved: true };
+}
+
+async function findUserByPublicCodeOrId(value) {
+  const key = normalizePublicUserCode(value);
+  if (!key) return null;
+  const byCode = await rdbSelect("users", "id,openid,public_user_code,display_name,status", (request) =>
+    request.eq("public_user_code", key).limit(1)
+  ).catch(() => []);
+  if (byCode[0]) return byCode[0];
+  if (/^\d+$/.test(key)) {
+    const byId = await rdbSelect("users", "id,openid,public_user_code,display_name,status", (request) =>
+      request.eq("id", Number(key)).limit(1)
+    ).catch(() => []);
+    if (byId[0]) return byId[0];
+  }
+  return null;
+}
+
+async function defaultReferralCommunityId(data, userId) {
+  const session = sessionFromData(data);
+  if (data.communityId) {
+    const communityId = id(data.communityId, "communityId");
+    requireCommunityAccess(data, communityId);
+    return communityId;
+  }
+  if (!session || session.role === "super_admin") return null;
+  const allowed = new Set((session.communityIds || []).map(Number));
+  const rows = await rdbSelect("community_memberships", "community_id,status", (request) =>
+    request.eq("user_id", userId).eq("status", "active").limit(100)
+  ).catch(() => []);
+  const match = rows.find((item) => allowed.has(Number(item.community_id)));
+  if (!match) {
+    const error = new Error("只能维护本社区成员的引荐关系");
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  return Number(match.community_id);
+}
+
+async function adminSetUserReferral(data) {
+  const session = await assertAdmin(data);
+  const referredUserId = id(data.userId || data.referredUserId, "userId");
+  if (session && session.role !== "super_admin") await assertUserInSessionCommunities(data, referredUserId);
+  const referrerKey = normalizePublicUserCode(data.referrerUserCode || data.referrerCode || data.referrerUserId);
+  if (!referrerKey) {
+    await rdbUpdate("user_referrals", { status: "revoked", note: text(data.note, 500) }, (request) =>
+      request.eq("referred_user_id", referredUserId).eq("status", "active")
+    ).catch(() => {});
+    return { success: true, saved: true, revoked: true };
+  }
+
+  const referrer = await findUserByPublicCodeOrId(referrerKey);
+  if (!referrer) {
+    const error = new Error("找不到这个引荐人用户ID");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+  if (Number(referrer.id) === Number(referredUserId)) {
+    const error = new Error("不能把自己设置为自己的引荐人");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+  if (referrer.status && referrer.status !== "active") {
+    const error = new Error("引荐人账号不是启用状态");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+
+  const communityId = await defaultReferralCommunityId(data, referredUserId);
+  await rdbUpdate("user_referrals", { status: "replaced" }, (request) =>
+    request.eq("referred_user_id", referredUserId).eq("status", "active")
+  ).catch(() => {});
+  await rdbInsert("user_referrals", {
+    referred_user_id: referredUserId,
+    referrer_user_id: Number(referrer.id),
+    community_id: communityId || null,
+    source: session && session.role === "community_admin" ? "community_admin" : "admin",
+    status: "active",
+    note: text(data.note, 500),
+    created_by_admin_account_id: session && session.accountId ? Number(session.accountId) : null,
+  });
+  return {
+    success: true,
+    saved: true,
+    referral: {
+      referred_user_id: referredUserId,
+      referrer_user_id: Number(referrer.id),
+      referrer_public_user_code: referrer.public_user_code || "",
+      referrer_display_name: referrer.display_name || "",
+      community_id: communityId || null,
+    },
+  };
 }
 
 async function adminDeleteUser(data) {
@@ -676,7 +813,7 @@ async function adminSearchUsersForCertification(data) {
   requireCommunityAccess(data, communityId);
   const keyword = text(data.keyword, 80);
   if (!keyword) return { success: true, users: [] };
-  const users = await rdbSelect("users", "id,openid,display_name,avatar_url,status,experience_points", (request) =>
+  const users = await rdbSelect("users", "id,openid,public_user_code,display_name,avatar_url,status,experience_points", (request) =>
     request.order("updated_at", { ascending: false }).limit(1000)
   );
   const userIds = users.map((item) => Number(item.id)).filter(Boolean);
@@ -696,6 +833,7 @@ async function adminSearchUsersForCertification(data) {
     .filter((item) => {
       const haystack = [
         item.id,
+        item.public_user_code,
         item.openid,
         item.display_name,
         item.profile && item.profile.name,
@@ -845,10 +983,11 @@ async function adminProxyAction(data) {
     if (data.action === "adminDeleteAdminAccount") return adminDeleteAdminAccount(data);
     return adminUpsertAdminAccount(data);
   }
-  if (["adminUpdateUser", "adminDeleteUser", "adminSaveUserCommunity", "adminRevokeUserCommunity", "adminUpdateCommunity"].includes(data.action)) {
+  if (["adminUpdateUser", "adminDeleteUser", "adminSaveUserCommunity", "adminRevokeUserCommunity", "adminUpdateCommunity", "adminSetUserReferral"].includes(data.action)) {
     await assertAdmin(data);
     if (data.action === "adminUpdateUser") return adminUpdateUser(data);
     if (data.action === "adminDeleteUser") return adminDeleteUser(data);
+    if (data.action === "adminSetUserReferral") return adminSetUserReferral(data);
     if (data.action === "adminUpdateCommunity") return adminUpdateCommunity(data);
     if (data.action === "adminRevokeUserCommunity") return adminRevokeUserCommunity(data);
     return adminSaveUserCommunity(data);
