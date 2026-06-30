@@ -121,6 +121,21 @@ async function ensurePublicUserCode(user) {
   return { ...user, public_user_code: publicUserCode };
 }
 
+async function getExperienceRulePoints(ruleKey, fallbackPoints = 0) {
+  if (!SQL_SYNC_ENABLED || !ruleKey) return Number(fallbackPoints || 0);
+  try {
+    const rows = await rdbSelect("experience_rules", "points,status", (request) =>
+      request.eq("rule_key", ruleKey).limit(1)
+    );
+    const rule = rows[0];
+    if (!rule || rule.status === "disabled") return 0;
+    return Number(rule.points || 0);
+  } catch (err) {
+    console.warn("load experience rule failed", ruleKey, err.message);
+    return Number(fallbackPoints || 0);
+  }
+}
+
 function detectPolarity(content) {
   const text = String(content || "");
   if (/不擅长|不适合|不会|不能|缺少|短板|避免|拒绝|不希望/.test(text)) return "negative";
@@ -266,16 +281,19 @@ async function syncProfileToSql(profile, sourceProfileId = "") {
     await upsertProfileRagSource(user, savedProfile);
   }
   if (!existing[0] && payload.profile_status === "complete") {
+    const points = await getExperienceRulePoints("register_profile", 10);
     await rdbInsert("user_experience_events", {
       user_id: user.id,
       event_type: "register_profile",
-      points: 10,
+      points,
       source_type: "user_profiles",
-      source_id: user.id,
+      source_id: savedProfile ? savedProfile.id : user.id,
       note: "注册并保存呆猫名片",
       created_by: user.id,
     });
-    await rdbUpdate("users", { experience_points: Number(user.experience_points || 0) + 10 }, (request) => request.eq("id", user.id));
+    if (points) {
+      await rdbUpdate("users", { experience_points: Number(user.experience_points || 0) + points }, (request) => request.eq("id", user.id));
+    }
   }
   return { user, profile: savedProfile };
 }
@@ -385,6 +403,7 @@ function publicSqlProfile(user, profile, communities = []) {
     stickerCode: profile.sticker_code || "",
     agreementVersion: profile.agreement_version || "",
     profileStatus: profile.profile_status || "",
+    experiencePoints: Number(user.experience_points || 0),
     communities,
   };
 }

@@ -279,6 +279,10 @@
         </view>
         <view class="card-name">{{cardProfile.name}}</view>
         <view class="card-job">{{cardProfile.job}}</view>
+        <view wx:if="{{cardProfile.levelName}}" class="card-level-row">
+          <text class="card-level-badge" style="color: {{cardProfile.levelColor}}; border-color: {{cardProfile.levelColor}};">{{cardProfile.levelName}}</text>
+          <text class="card-level-points">{{cardProfile.experiencePoints || 0}} 经验</text>
+        </view>
         <view class="card-intro">{{cardProfile.intro}}</view>
 
         <view class="tag-row">

@@ -20,13 +20,13 @@
   <view class="dm-card level-card">
     <view class="dm-row dm-between">
       <view>
-        <view class="level-name">{{level.name}}</view>
+        <view class="level-name" style="color: {{level.levelColor}};">{{level.name}}</view>
         <view class="dm-muted">{{identity.isCommunityMember ? '社区成员' : '围观者'}} · {{identity.experiencePoints || 0}} 经验</view>
       </view>
       <view class="role-badge">{{identity.isCommunityMember ? '已认证' : '未认证'}}</view>
     </view>
     <view class="level-bar">
-      <view style="width: {{level.progressPercent}}%;"></view>
+      <view style="width: {{level.progressPercent}}%; background: {{level.levelColor}};"></view>
     </view>
     <view class="level-next">{{levelNextText}}</view>
     <view wx:if="{{identity.communities.length}}" class="community-list">

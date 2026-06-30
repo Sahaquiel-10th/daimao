@@ -1095,6 +1095,29 @@ button::after {
   font-size: 25rpx;
 }
 
+.card-level-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10rpx;
+  margin-top: 10rpx;
+}
+
+.card-level-badge {
+  padding: 5rpx 12rpx;
+  border: 3rpx solid #2d685f;
+  border-radius: 999rpx;
+  background: #fffdfa;
+  font-size: 21rpx;
+  font-weight: 900;
+}
+
+.card-level-points {
+  color: #79716a;
+  font-size: 21rpx;
+  font-weight: 700;
+}
+
 .card-intro {
   margin-top: 18rpx;
   padding: 20rpx;

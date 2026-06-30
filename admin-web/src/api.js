@@ -127,7 +127,7 @@ export async function uploadAsset(kind, file) {
   const adminSessionToken = getToken();
   if (!adminSessionToken) throw new Error("请先登录后台");
   if (!file) throw new Error("请选择图片");
-  if (file.size > 8 * 1024 * 1024) throw new Error("图片不能超过 8MB");
+  if (file.size > 2 * 1024 * 1024) throw new Error("图片不能超过 2MB，请压缩后再上传");
   const uploadFile = await prepareImageForUpload(file);
   const params = new URLSearchParams({
     kind,

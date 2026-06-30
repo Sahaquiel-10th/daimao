@@ -995,6 +995,9 @@ async function saveCoverAfterBusiness(data, result) {
   if (data.action === "adminCreateProject" && data.project && data.project.coverUrl !== undefined && result.projectId) {
     await rdbUpdate("projects", { cover_url: text(data.project.coverUrl, 1000) }, (request) => request.eq("id", id(result.projectId, "projectId")));
   }
+  if (data.action === "adminCreateEvent" && data.event && data.event.coverUrl !== undefined && result.eventId) {
+    await rdbUpdate("official_events", { cover_url: text(data.event.coverUrl, 1000) }, (request) => request.eq("id", id(result.eventId, "eventId")));
+  }
   if (data.action === "adminUpdateProject" && data.patch && data.patch.coverUrl !== undefined) {
     await rdbUpdate("projects", { cover_url: text(data.patch.coverUrl, 1000) }, (request) => request.eq("id", id(data.projectId, "projectId")));
   }
@@ -1118,10 +1121,18 @@ async function adminUploadAsset(data) {
   const kind = safeAssetKind(data.kind);
   const cloudPath = `daimao/admin/${kind}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
   const result = await getApp().uploadFile({ cloudPath, fileContent });
+  let tempFileURL = "";
+  try {
+    const urlResult = await getApp().getTempFileURL({ fileList: [result.fileID] });
+    tempFileURL = (urlResult.fileList && urlResult.fileList[0] && (urlResult.fileList[0].tempFileURL || urlResult.fileList[0].download_url)) || "";
+  } catch (err) {
+    console.warn("获取上传图片临时 URL 失败", err.message);
+  }
   return {
     success: true,
     fileID: result.fileID,
     cloudPath,
+    tempFileURL,
   };
 }
 

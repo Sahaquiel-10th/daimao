@@ -191,11 +191,15 @@ function assetSrc(primary, fallback) {
   return "";
 }
 
+function assetStatusText(value) {
+  return value ? "已上传，保存后生效" : "未上传";
+}
+
 function isSessionError(err) {
   const code = err && err.code;
   const message = String((err && err.message) || "");
-  return ["LOGIN_FAILED", "LOGIN_NOT_CONFIGURED", "FORBIDDEN", "UNAUTHORIZED", "LOGIN_REQUIRED"].includes(code)
-    || /请先登录后台|登录失败|会话|session|无法识别当前微信用户/i.test(message);
+  return ["LOGIN_FAILED", "LOGIN_NOT_CONFIGURED", "UNAUTHORIZED", "LOGIN_REQUIRED"].includes(code)
+    || /请先登录后台|登录失败|会话|session/i.test(message);
 }
 
 function officialDisplayOrder(weight) {
@@ -217,6 +221,7 @@ function userDraftFrom(user) {
     publicUserCode: user?.public_user_code || "",
     displayName: user?.display_name || "",
     avatarUrl: user?.avatar_url || profile.avatar_url || "",
+    avatarDisplayUrl: user?.avatar_display_url || profile.avatar_display_url || "",
     status: user?.status || "active",
     isAdmin: !!user?.is_admin,
     experiencePoints: Number(user?.experience_points || 0),
@@ -237,6 +242,7 @@ function communityDraftFrom(community) {
     name: community?.name || "",
     badgeName: community?.badge_name || "",
     logoUrl: community?.logo_url || "",
+    logoDisplayUrl: community?.logo_display_url || "",
     description: community?.description || "",
     status: community?.status || "active",
     sortWeight: Number(community?.sort_weight || 0),
@@ -249,6 +255,7 @@ function emptyCommunityDraft() {
     name: "",
     badgeName: "",
     logoUrl: "",
+    logoDisplayUrl: "",
     description: "",
     status: "active",
     sortWeight: 0,
@@ -290,10 +297,10 @@ export default function App() {
   const [userEvidence, setUserEvidence] = useState([]);
   const [selectedCommunity, setSelectedCommunity] = useState(null);
   const [communityDraft, setCommunityDraft] = useState(null);
-  const [adminDraft, setAdminDraft] = useState(emptyAdminDraft());
+  const [adminDraft, setAdminDraft] = useState(null);
   const [evidenceDraft, setEvidenceDraft] = useState(null);
   const [projectDraft, setProjectDraft] = useState(null);
-  const [eventDraft, setEventDraft] = useState(emptyEvent);
+  const [eventDraft, setEventDraft] = useState(null);
   const [toast, setToast] = useState(null);
   const [errorNeedsLogin, setErrorNeedsLogin] = useState(false);
 
@@ -331,7 +338,7 @@ export default function App() {
         const nextCommunity = (payload.communities || []).find((item) => Number(item.id) === Number(selectedCommunity.id));
         if (nextCommunity) {
           setSelectedCommunity(nextCommunity);
-          setCommunityDraft(communityDraftFrom(nextCommunity));
+          if (communityDraft) setCommunityDraft(communityDraftFrom(nextCommunity));
         }
       }
     } catch (err) {
@@ -420,6 +427,7 @@ export default function App() {
     setLoading(true);
     setError("");
     setErrorNeedsLogin(false);
+    setToast({ type: "info", message: "正在保存..." });
     try {
       await callAdmin(action, payload);
       await refresh();
@@ -463,12 +471,17 @@ export default function App() {
   }
 
   async function upload(kind, file, apply) {
+    if (file && file.size > 2 * 1024 * 1024) {
+      showError(new Error("图片不能超过 2MB，请压缩后再上传"), "上传失败");
+      return;
+    }
     setLoading(true);
     setError("");
     setErrorNeedsLogin(false);
+    setToast({ type: "info", message: "正在上传图片..." });
     try {
       const result = await uploadAsset(kind, file);
-      apply(result.fileID);
+      apply(result.fileID, result.tempFileURL || result.displayUrl || "");
       setToast({ type: "success", message: "图片已上传，记得保存当前表单" });
     } catch (err) {
       showError(err, "上传失败");
@@ -678,13 +691,18 @@ export default function App() {
               evidence={selectedUserEvidence}
               isSuperAdmin={isSuperAdmin}
               onChange={setUserDraft}
-              onUploadAvatar={(file) => upload("user-avatar", file, (fileID) => setUserDraft((draft) => ({ ...draft, avatarUrl: fileID })))}
+              onUploadAvatar={(file) => upload("user-avatar", file, (fileID, displayUrl) => setUserDraft((draft) => ({ ...draft, avatarUrl: fileID, avatarDisplayUrl: displayUrl })))}
               onSubmit={() =>
                 userDraft &&
                 run("adminUpdateUser", {
                   userId: userDraft.id,
                   patch: userDraft,
-                }, "用户资料已保存")
+                }, "用户资料已保存").then((ok) => {
+                  if (ok) {
+                    setSelectedUser(null);
+                    setUserDraft(null);
+                  }
+                })
               }
               onSaveCommunity={(form) =>
                 userDraft?.id &&
@@ -753,19 +771,6 @@ export default function App() {
               <CommunityTable communities={filteredCommunities} onEdit={selectCommunity} />
             </section>
             <section className="community-layout">
-              <CommunityEditor
-                draft={communityDraft}
-                readOnly={!isSuperAdmin}
-                onChange={setCommunityDraft}
-                onUpload={(file) => upload("community-logo", file, (fileID) => setCommunityDraft((draft) => ({ ...draft, logoUrl: fileID })))}
-                onSubmit={() =>
-                  communityDraft &&
-                  run("adminUpdateCommunity", {
-                    communityId: communityDraft.id,
-                    patch: communityDraft,
-                  }, communityDraft.id ? "社区资料已保存" : "社区已创建")
-                }
-              />
               <CommunityMembers
                 community={selectedCommunity}
                 members={communityMembers}
@@ -825,11 +830,30 @@ export default function App() {
                 />
               </Modal>
             )}
+            {communityDraft && (
+              <Modal title={communityDraft.id ? "编辑社区" : "新建社区"} onClose={() => setCommunityDraft(null)}>
+                <CommunityEditor
+                  draft={communityDraft}
+                  readOnly={!isSuperAdmin}
+                  onChange={setCommunityDraft}
+                  onUpload={(file) => upload("community-logo", file, (fileID, displayUrl) => setCommunityDraft((draft) => ({ ...draft, logoUrl: fileID, logoDisplayUrl: displayUrl })))}
+                  onSubmit={() =>
+                    communityDraft &&
+                    run("adminUpdateCommunity", {
+                      communityId: communityDraft.id,
+                      patch: communityDraft,
+                    }, communityDraft.id ? "社区资料已保存" : "社区已创建").then((ok) => {
+                      if (ok) setCommunityDraft(null);
+                    })
+                  }
+                />
+              </Modal>
+            )}
           </section>
         )}
 
         {activeTab === "admins" && (
-          <section className="split-view">
+          <section className="content-grid">
             <section className="panel dm-card">
               <div className="panel-title-row">
                 <h3>后台管理员</h3>
@@ -837,28 +861,36 @@ export default function App() {
               </div>
               <AdminAccountTable accounts={data?.adminAccounts || []} communities={data?.communities || []} onEdit={setAdminDraft} />
             </section>
-            <AdminAccountEditor
-              draft={adminDraft}
-              communities={data?.communities || []}
-              onChange={setAdminDraft}
-              onSubmit={() =>
-                adminDraft &&
-                run("adminUpsertAdminAccount", {
-                  accountId: adminDraft.id,
-                  patch: adminDraft,
-                }, adminDraft.id ? "管理员账号已保存" : "管理员账号已创建")
-              }
-              onDisable={() => {
-                if (!adminDraft?.id) return;
-                const ok = window.confirm(`确认停用管理员「${adminDraft.username}」？`);
-                if (ok) run("adminDeleteAdminAccount", { accountId: adminDraft.id }, "管理员账号已停用");
-              }}
-            />
+            {adminDraft && (
+              <Modal title={adminDraft.id ? "编辑管理员" : "新建管理员"} onClose={() => setAdminDraft(null)}>
+                <AdminAccountEditor
+                  draft={adminDraft}
+                  communities={data?.communities || []}
+                  onChange={setAdminDraft}
+                  onSubmit={() =>
+                    adminDraft &&
+                    run("adminUpsertAdminAccount", {
+                      accountId: adminDraft.id,
+                      patch: adminDraft,
+                    }, adminDraft.id ? "管理员账号已保存" : "管理员账号已创建").then((ok) => {
+                      if (ok) setAdminDraft(null);
+                    })
+                  }
+                  onDisable={() => {
+                    if (!adminDraft?.id) return;
+                    const ok = window.confirm(`确认停用管理员「${adminDraft.username}」？`);
+                    if (ok) run("adminDeleteAdminAccount", { accountId: adminDraft.id }, "管理员账号已停用").then((saved) => {
+                      if (saved) setAdminDraft(null);
+                    });
+                  }}
+                />
+              </Modal>
+            )}
           </section>
         )}
 
         {activeTab === "projects" && (
-          <section className="split-view">
+          <section className="content-grid">
             <section className="panel dm-card">
               <div className="panel-title-row">
                 <h3>项目管理</h3>
@@ -866,55 +898,82 @@ export default function App() {
               </div>
               <ProjectTable projects={filteredProjects} onEdit={setProjectDraft} communities={data?.communities || []} users={data?.users || []} />
             </section>
-            <ProjectEditor
-              draft={projectDraft}
-              onChange={setProjectDraft}
-              communities={data?.communities || []}
-              users={data?.users || []}
-              isSuperAdmin={isSuperAdmin}
-              onUpload={(file) => upload("project-cover", file, (fileID) => setProjectDraft((draft) => ({ ...draft, cover_url: fileID })))}
-              onSubmit={() => {
-                if (!projectDraft) return;
-                const payload = toProjectPatch(projectDraft);
-                if (!payload.communityId && !isSuperAdmin && (data?.communities || []).length === 1) {
-                  payload.communityId = data.communities[0].id;
-                }
-                if (projectDraft.id) run("adminUpdateProject", { projectId: projectDraft.id, patch: payload }, "项目已保存");
-                else run("adminCreateProject", { project: payload }, "项目已创建");
-              }}
-            />
+            {projectDraft && (
+              <Modal title={projectDraft.id ? "编辑项目" : "新建项目"} onClose={() => setProjectDraft(null)}>
+                <ProjectEditor
+                  draft={projectDraft}
+                  onChange={setProjectDraft}
+                  communities={data?.communities || []}
+                  users={data?.users || []}
+                  isSuperAdmin={isSuperAdmin}
+                  onUpload={(file) => upload("project-cover", file, (fileID, displayUrl) => setProjectDraft((draft) => ({ ...draft, cover_url: fileID, cover_display_url: displayUrl })))}
+                  onSubmit={() => {
+                    if (!projectDraft) return;
+                    const payload = toProjectPatch(projectDraft);
+                    if (!payload.communityId && !isSuperAdmin && (data?.communities || []).length === 1) {
+                      payload.communityId = data.communities[0].id;
+                    }
+                    const request = projectDraft.id
+                      ? run("adminUpdateProject", { projectId: projectDraft.id, patch: payload }, "项目已保存")
+                      : run("adminCreateProject", { project: payload }, "项目已创建");
+                    request.then((ok) => {
+                      if (ok) setProjectDraft(null);
+                    });
+                  }}
+                />
+              </Modal>
+            )}
           </section>
         )}
 
         {activeTab === "events" && (
-          <section className="split-view">
+          <section className="content-grid">
             <section className="panel dm-card">
-              <h3>活动管理</h3>
+              <div className="panel-title-row">
+                <h3>活动管理</h3>
+                <button type="button" onClick={() => setEventDraft(emptyEvent)}>新建活动</button>
+              </div>
               <EventTable events={filteredEvents} onEdit={(item) => setEventDraft(fromEventRow(item))} communities={data?.communities || []} />
             </section>
-            <EventEditor
-              draft={eventDraft}
-              onChange={setEventDraft}
-              communities={data?.communities || []}
-              isSuperAdmin={isSuperAdmin}
-              onUpload={(file) => upload("event-cover", file, (fileID) => setEventDraft((draft) => ({ ...draft, coverUrl: fileID })))}
-              onSubmit={() => {
-                const payload = toEventPayload(eventDraft);
-                if (!payload.communityId && !isSuperAdmin && (data?.communities || []).length === 1) {
-                  payload.communityId = data.communities[0].id;
-                }
-                if (eventDraft.id) run("adminUpdateEvent", { eventId: eventDraft.id, event: payload }, "活动已保存");
-                else run("adminCreateEvent", { event: payload }, "活动已发布");
-              }}
-              onNew={() => setEventDraft(emptyEvent)}
-            />
+            {eventDraft && (
+              <Modal title={eventDraft.id ? "编辑活动" : "发布活动"} onClose={() => setEventDraft(null)}>
+                <EventEditor
+                  draft={eventDraft}
+                  onChange={setEventDraft}
+                  communities={data?.communities || []}
+                  isSuperAdmin={isSuperAdmin}
+                  onUpload={(file) => upload("event-cover", file, (fileID, displayUrl) => setEventDraft((draft) => ({ ...draft, coverUrl: fileID, coverDisplayUrl: displayUrl })))}
+                  onSubmit={() => {
+                    const payload = toEventPayload(eventDraft);
+                    if (!payload.communityId && !isSuperAdmin && (data?.communities || []).length === 1) {
+                      payload.communityId = data.communities[0].id;
+                    }
+                    const request = eventDraft.id
+                      ? run("adminUpdateEvent", { eventId: eventDraft.id, event: payload }, "活动已保存")
+                      : run("adminCreateEvent", { event: payload }, "活动已发布");
+                    request.then((ok) => {
+                      if (ok) setEventDraft(null);
+                    });
+                  }}
+                />
+              </Modal>
+            )}
           </section>
         )}
 
         {activeTab === "pending" && (
           <section className="content-grid">
             <section className="panel dm-card">
-              <h3>待处理中心</h3>
+              <div className="panel-title-row">
+                <h3>待处理中心</h3>
+                <button
+                  type="button"
+                  onClick={() => run("processRagIndexJobs", { limit: 20 }, "已触发待索引处理")}
+                  disabled={loading || !pendingItems.some((item) => item.type === "RAG 索引" && item.status === "pending")}
+                >
+                  立即处理待索引
+                </button>
+              </div>
               <PendingTable items={pendingItems} />
             </section>
           </section>
@@ -1096,10 +1155,12 @@ function UserEditor({
         <input value={draft.displayName} onChange={(event) => onChange({ ...draft, displayName: event.target.value })} />
       </Field>
       <Field label="头像">
-        <div className="asset-row">
-          <input value={draft.avatarUrl} onChange={(event) => onChange({ ...draft, avatarUrl: event.target.value })} placeholder="上传后自动填入 cloud://..." />
-          <UploadButton onUpload={onUploadAvatar} />
-        </div>
+        <AssetUploadField
+          value={draft.avatarUrl}
+          displayUrl={draft.avatarDisplayUrl}
+          onUpload={onUploadAvatar}
+          onClear={() => onChange({ ...draft, avatarUrl: "", avatarDisplayUrl: "" })}
+        />
       </Field>
       <Field label="经验值">
         <input type="number" value={draft.experiencePoints} onChange={(event) => onChange({ ...draft, experiencePoints: event.target.value })} />
@@ -1312,14 +1373,13 @@ function AdminAccountEditor({ draft, communities, onChange, onSubmit, onDisable 
   }
   return (
     <form
-      className="panel editor-panel dm-card"
+      className="editor-panel embedded-editor"
       onSubmit={(event) => {
         event.preventDefault();
         onSubmit();
       }}
     >
       <div className="editor-title">
-        <h3>{draft.id ? "编辑管理员" : "新建管理员"}</h3>
         {draft.id && <button className="danger-button" type="button" onClick={onDisable}>停用</button>}
       </div>
       <Field label="登录账号">
@@ -1410,8 +1470,7 @@ function CommunityEditor({ draft, readOnly = false, onChange, onSubmit, onUpload
     );
   }
   return (
-    <aside className="panel editor-panel dm-card">
-      <h3>社区编辑</h3>
+    <aside className="editor-panel embedded-editor">
       {readOnly && <p className="muted small-muted">社区管理员只能维护本社区成员、活动和证据链；社区主体资料由超级管理员维护。</p>}
       <Field label="社区名称">
         <input disabled={readOnly} value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
@@ -1423,10 +1482,13 @@ function CommunityEditor({ draft, readOnly = false, onChange, onSubmit, onUpload
         <textarea disabled={readOnly} value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} />
       </Field>
       <Field label="社区 logo">
-        <div className="asset-row">
-          <input disabled={readOnly} value={draft.logoUrl} onChange={(event) => onChange({ ...draft, logoUrl: event.target.value })} placeholder="上传后自动填入 cloud://..." />
-          {!readOnly && <UploadButton onUpload={onUpload} />}
-        </div>
+        <AssetUploadField
+          value={draft.logoUrl}
+          displayUrl={draft.logoDisplayUrl}
+          disabled={readOnly}
+          onUpload={onUpload}
+          onClear={() => onChange({ ...draft, logoUrl: "", logoDisplayUrl: "" })}
+        />
       </Field>
       <Field label="状态">
         <select disabled={readOnly} value={draft.status} onChange={(event) => onChange({ ...draft, status: event.target.value })}>
@@ -1636,6 +1698,28 @@ function UploadButton({ onUpload }) {
   );
 }
 
+function AssetUploadField({ value, displayUrl, onUpload, onClear, disabled = false }) {
+  const preview = assetSrc(displayUrl, value);
+  return (
+    <div className="asset-upload-field">
+      {preview ? (
+        <img className="asset-preview" src={preview} alt="" />
+      ) : (
+        <div className="asset-placeholder">暂无图片</div>
+      )}
+      <div className="asset-upload-actions">
+        <span>{assetStatusText(value)}</span>
+        {!disabled && (
+          <div className="inline-actions">
+            <UploadButton onUpload={onUpload} />
+            {value && <button type="button" onClick={onClear}>清除</button>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], users = [], isSuperAdmin = false }) {
   if (!draft) {
     return (
@@ -1646,8 +1730,7 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], 
     );
   }
   return (
-    <aside className="panel editor-panel dm-card">
-      <h3>项目编辑</h3>
+    <aside className="editor-panel embedded-editor">
       <Field label="项目名称">
         <input value={draft.name || ""} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
       </Field>
@@ -1668,12 +1751,13 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], 
           ))}
         </select>
       </Field>
-      <Field label="封面 URL / cloud fileID">
-        {assetSrc(draft.cover_display_url, draft.cover_url || draft.coverUrl) && <img className="cover-preview" src={assetSrc(draft.cover_display_url, draft.cover_url || draft.coverUrl)} alt="" />}
-        <div className="asset-row">
-          <input value={draft.cover_url || draft.coverUrl || ""} onChange={(event) => onChange({ ...draft, cover_url: event.target.value })} placeholder="cloud://..." />
-          <UploadButton onUpload={onUpload} />
-        </div>
+      <Field label="项目封面">
+        <AssetUploadField
+          value={draft.cover_url || draft.coverUrl || ""}
+          displayUrl={draft.cover_display_url || draft.coverDisplayUrl || ""}
+          onUpload={onUpload}
+          onClear={() => onChange({ ...draft, cover_url: "", coverUrl: "", cover_display_url: "", coverDisplayUrl: "" })}
+        />
       </Field>
       <Field label="阶段">
         <input value={draft.stage || ""} onChange={(event) => onChange({ ...draft, stage: event.target.value })} />
@@ -1764,13 +1848,9 @@ function EventTable({ events, onEdit, communities = [] }) {
   );
 }
 
-function EventEditor({ draft, onChange, onSubmit, onNew, onUpload, communities = [], isSuperAdmin = false }) {
+function EventEditor({ draft, onChange, onSubmit, onUpload, communities = [], isSuperAdmin = false }) {
   return (
-    <aside className="panel editor-panel dm-card">
-      <div className="editor-title">
-        <h3>{draft.id ? "活动编辑" : "发布活动"}</h3>
-        <button onClick={onNew}>新建</button>
-      </div>
+    <aside className="editor-panel embedded-editor">
       <Field label="标题">
         <input value={draft.title || ""} onChange={(event) => onChange({ ...draft, title: event.target.value })} />
       </Field>
@@ -1783,12 +1863,13 @@ function EventEditor({ draft, onChange, onSubmit, onNew, onUpload, communities =
           ))}
         </select>
       </Field>
-      <Field label="封面 URL / cloud fileID">
-        {assetSrc(draft.coverDisplayUrl, draft.coverUrl) && <img className="cover-preview" src={assetSrc(draft.coverDisplayUrl, draft.coverUrl)} alt="" />}
-        <div className="asset-row">
-          <input value={draft.coverUrl || ""} onChange={(event) => onChange({ ...draft, coverUrl: event.target.value })} placeholder="cloud://..." />
-          <UploadButton onUpload={onUpload} />
-        </div>
+      <Field label="活动封面">
+        <AssetUploadField
+          value={draft.coverUrl || ""}
+          displayUrl={draft.coverDisplayUrl || ""}
+          onUpload={onUpload}
+          onClear={() => onChange({ ...draft, coverUrl: "", coverDisplayUrl: "" })}
+        />
       </Field>
       <Field label="类型">
         <select value={draft.eventType || "offline_meeting"} onChange={(event) => onChange({ ...draft, eventType: event.target.value })}>

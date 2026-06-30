@@ -3,6 +3,7 @@ const assets = require("../../utils/assets");
 const sharedCloud = require("../../utils/cloud");
 const secretaryBubble = require("../../utils/secretaryBubble");
 const runtime = require("../../config/runtime");
+const experience = require("../../utils/experience");
 
 const STORAGE_KEYS = {
   profile: "daimao_profile",
@@ -240,6 +241,13 @@ function normalizeProfileForDisplay(profile) {
     ...profile,
     answers: normalizedAnswers,
   };
+  const points = Number(profile.experiencePoints || profile.experience_points || 0);
+  if (points || profile.communities) {
+    const level = experience.getLevel(points);
+    normalizedProfile.levelName = level.name;
+    normalizedProfile.levelColor = level.levelColor;
+    normalizedProfile.experiencePoints = points;
+  }
   const avatar = String(profile.avatar || "");
   if (avatar.indexOf("../../images/") === 0 || avatar.indexOf("/images/") === 0) {
     return { ...normalizedProfile, avatar: defaultAvatarURL(), avatarCloudFileID: defaultAvatarFileID() };

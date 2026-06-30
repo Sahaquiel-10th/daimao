@@ -2053,6 +2053,12 @@ async function acceptProjectInvitation(event, user) {
 }
 
 async function listEvents(event, user) {
+  const memberships = await getCommunityMemberships(user.id);
+  const allowedCommunityIds = new Set(memberships.map((item) => Number(item.community_id)).filter(Boolean));
+  const canSeeEvent = (item) => {
+    const communityId = Number(item.community_id || 0);
+    return !communityId || user.is_admin || allowedCommunityIds.has(communityId);
+  };
   if (useRdb()) {
     const events = await rdbSelect("official_events", "*", (request) =>
       request
@@ -2060,8 +2066,8 @@ async function listEvents(event, user) {
         .in("status", ["published", "closed"])
         .order("official_sort_weight", { ascending: false })
         .order("start_time", { ascending: true })
-        .limit(50)
-    );
+        .limit(200)
+    ).then((rows) => rows.filter(canSeeEvent).slice(0, 50));
     const eventIds = events.map((item) => Number(item.id)).filter(Boolean);
     const hostIds = unique(events.map((item) => item.host_user_id)).map(Number).filter(Boolean);
     const [hosts, registrations] = await Promise.all([
@@ -2086,14 +2092,20 @@ async function listEvents(event, user) {
       }))
     };
   }
+  const allowedIds = Array.from(allowedCommunityIds);
+  const communityWhere = user.is_admin
+    ? ""
+    : allowedIds.length
+      ? ` AND (e.community_id IS NULL OR e.community_id IN (${allowedIds.map(() => "?").join(",")}))`
+      : " AND e.community_id IS NULL";
   const rows = await query(
     `SELECT e.*, u.display_name AS host_name, er.status AS registration_status,
       (SELECT COUNT(*) FROM event_registrations x WHERE x.event_id = e.id AND x.status IN ('registered','approved')) AS registration_count
      FROM official_events e JOIN users u ON u.id = e.host_user_id
      LEFT JOIN event_registrations er ON er.event_id = e.id AND er.user_id = ?
-     WHERE e.visibility = 'public' AND e.status IN ('published','closed')
+     WHERE e.visibility = 'public' AND e.status IN ('published','closed')${communityWhere}
      ORDER BY e.official_sort_weight DESC, e.start_time ASC LIMIT 50`,
-    [user.id]
+    [user.id, ...(user.is_admin ? [] : allowedIds)]
   );
   return { events: rows };
 }
@@ -2104,6 +2116,12 @@ async function registerEvent(event, user) {
     const rows = await rdbSelect("official_events", "*", (request) => request.eq("id", eventId).limit(1));
     const item = rows[0];
     if (!item || item.status !== "published") throw codedError("EVENT_CLOSED", "活动当前不可报名");
+    const communityId = Number(item.community_id || 0);
+    if (communityId && !user.is_admin) {
+      const memberships = await getCommunityMemberships(user.id);
+      const hasAccess = memberships.some((membership) => Number(membership.community_id) === communityId);
+      if (!hasAccess) throw codedError("FORBIDDEN", "只有该社区成员可以报名这个活动");
+    }
     const registrations = await rdbSelect("event_registrations", "*", (request) => request.eq("event_id", eventId).limit(1000));
     const registeredCount = registrations.filter((registration) => ["registered", "approved"].includes(registration.status)).length;
     if (item.capacity && registeredCount >= Number(item.capacity)) throw codedError("EVENT_FULL", "活动名额已满");
@@ -2126,6 +2144,11 @@ async function registerEvent(event, user) {
   );
   const item = rows[0];
   if (!item || item.status !== "published") throw codedError("EVENT_CLOSED", "活动当前不可报名");
+  if (item.community_id && !user.is_admin) {
+    const memberships = await getCommunityMemberships(user.id);
+    const hasAccess = memberships.some((membership) => Number(membership.community_id) === Number(item.community_id));
+    if (!hasAccess) throw codedError("FORBIDDEN", "只有该社区成员可以报名这个活动");
+  }
   if (item.capacity && Number(item.registered) >= Number(item.capacity)) throw codedError("EVENT_FULL", "活动名额已满");
   await query(
     `INSERT INTO event_registrations (event_id, user_id, status) VALUES (?, ?, 'registered')

@@ -26,14 +26,44 @@ function minPointsForLevel(levelNumber) {
   return Math.round(10 * Math.pow(levelNumber - 1, 2.15));
 }
 
-const LEVELS = LEVEL_TITLES.map((title, index) => {
+const LEVEL_TAIL_TITLES = [
+  "联盟核心",
+  "项目发动机",
+  "生态建设者",
+  "可信主理人",
+  "超级协作者",
+  "呆猫传说",
+];
+
+function levelLabel(levelNumber) {
+  return `Lv.${String(levelNumber).padStart(2, "0")}`;
+}
+
+function levelTitle(levelNumber) {
+  if (levelNumber <= LEVEL_TITLES.length) return LEVEL_TITLES[levelNumber - 1];
+  const tailIndex = (levelNumber - LEVEL_TITLES.length - 1) % LEVEL_TAIL_TITLES.length;
+  const lap = Math.floor((levelNumber - LEVEL_TITLES.length - 1) / LEVEL_TAIL_TITLES.length) + 2;
+  return `${LEVEL_TAIL_TITLES[tailIndex]} ${lap}`;
+}
+
+function levelColor(levelNumber) {
+  const clamped = Math.min(Math.max(Number(levelNumber || 1), 1), 80);
+  const hue = Math.max(8, 170 - clamped * 2);
+  const saturation = Math.min(92, 54 + clamped);
+  const lightness = Math.max(34, 48 - Math.floor(clamped / 5));
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
+const LEVELS = Array.from({ length: LEVEL_TITLES.length }, (_, index) => {
   const levelNumber = index + 1;
-  const level = `Lv.${String(levelNumber).padStart(2, "0")}`;
+  const level = levelLabel(levelNumber);
   return {
     level,
+    levelNumber,
     min: minPointsForLevel(levelNumber),
-    title,
-    name: `${level} ${title}`,
+    title: levelTitle(levelNumber),
+    color: levelColor(levelNumber),
+    name: `${level} ${levelTitle(levelNumber)}`,
   };
 });
 
@@ -56,23 +86,29 @@ const RULES = [
 
 function getLevel(points) {
   const score = Math.max(Number(points || 0), 0);
-  let current = LEVELS[0];
-  let next = null;
-  for (let index = 0; index < LEVELS.length; index += 1) {
-    if (score >= LEVELS[index].min) {
-      current = LEVELS[index];
-      next = LEVELS[index + 1] || null;
-    }
+  let levelNumber = 1;
+  while (score >= minPointsForLevel(levelNumber + 1)) {
+    levelNumber += 1;
   }
+  const nextLevelNumber = levelNumber + 1;
+  const current = {
+    level: levelLabel(levelNumber),
+    levelNumber,
+    min: minPointsForLevel(levelNumber),
+    title: levelTitle(levelNumber),
+    color: levelColor(levelNumber),
+  };
+  const nextMin = minPointsForLevel(nextLevelNumber);
   return {
     ...current,
     name: `${current.level} ${current.title}`,
     points: score,
-    nextLevel: next ? next.level : "",
-    nextMin: next ? next.min : current.min,
-    pointsToNext: next ? Math.max(next.min - score, 0) : 0,
-    progress: next ? Math.min(Math.round(((score - current.min) / (next.min - current.min)) * 100), 100) : 100,
-    progressPercent: next ? Math.min(Math.round(((score - current.min) / (next.min - current.min)) * 100), 100) : 100,
+    nextLevel: levelLabel(nextLevelNumber),
+    nextMin,
+    pointsToNext: Math.max(nextMin - score, 0),
+    progress: Math.min(Math.round(((score - current.min) / (nextMin - current.min)) * 100), 100),
+    progressPercent: Math.min(Math.round(((score - current.min) / (nextMin - current.min)) * 100), 100),
+    levelColor: current.color,
   };
 }
 

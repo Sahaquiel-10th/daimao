@@ -94,8 +94,7 @@ Page({
 
   buildLevelNextText(points) {
     const level = experience.getLevel(points);
-    if (!level.next) return "已经到达当前最高等级";
-    return `距离 ${level.next.name} 还差 ${level.pointsToNext} 经验`;
+    return `距离 ${level.nextLevel} 还差 ${level.pointsToNext} 经验`;
   },
 
   openSecretary() {
