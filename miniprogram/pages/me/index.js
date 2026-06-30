@@ -9,6 +9,18 @@ const ICONS = {
   friends: "/images/daimao2/friends.png",
   me: "/images/daimao2/project-task.png",
 };
+const RULE_KEYS = [
+  "register_profile",
+  "card_viewed_by_other",
+  "view_other_card",
+  "apply_project",
+  "join_project",
+  "project_completed_member",
+];
+const RULES_BY_KEY = experience.RULES.reduce((map, rule) => {
+  map[rule.key] = rule;
+  return map;
+}, {});
 
 Page({
   data: {
@@ -24,14 +36,7 @@ Page({
     },
     level: experience.getLevel(0),
     levelNextText: "距离 Lv.02 还差 10 经验",
-    experienceRules: [
-      experience.RULES.register_profile,
-      experience.RULES.card_viewed_by_other,
-      experience.RULES.view_other_card,
-      experience.RULES.apply_project,
-      experience.RULES.join_project,
-      experience.RULES.project_completed_member,
-    ],
+    experienceRules: RULE_KEYS.map((key) => RULES_BY_KEY[key]).filter(Boolean),
     projects: [],
     events: [],
     memories: [],

@@ -1,15 +1,41 @@
-const LEVELS = [
-  { level: "Lv.01", min: 0, title: "刚进窝" },
-  { level: "Lv.02", min: 10, title: "有名片了" },
-  { level: "Lv.03", min: 30, title: "开始认识人" },
-  { level: "Lv.04", min: 70, title: "稳定出没" },
-  { level: "Lv.05", min: 140, title: "靠谱协作者" },
-  { level: "Lv.06", min: 260, title: "项目熟手" },
-  { level: "Lv.07", min: 460, title: "营主苗子" },
-  { level: "Lv.08", min: 760, title: "强交付者" },
-  { level: "Lv.09", min: 1200, title: "社区骨干" },
-  { level: "Lv.10", min: 1800, title: "王牌合作者" },
+const LEVEL_TITLES = [
+  "刚进窝",
+  "有名片了",
+  "开始认识人",
+  "稳定出没",
+  "靠谱协作者",
+  "项目熟手",
+  "营主苗子",
+  "强交付者",
+  "社区骨干",
+  "王牌合作者",
+  "项目领队",
+  "交付专家",
+  "社区招牌",
+  "共创合伙人",
+  "联盟核心",
+  "项目发动机",
+  "生态建设者",
+  "可信主理人",
+  "超级协作者",
+  "呆猫传说",
 ];
+
+function minPointsForLevel(levelNumber) {
+  if (levelNumber <= 1) return 0;
+  return Math.round(10 * Math.pow(levelNumber - 1, 2.15));
+}
+
+const LEVELS = LEVEL_TITLES.map((title, index) => {
+  const levelNumber = index + 1;
+  const level = `Lv.${String(levelNumber).padStart(2, "0")}`;
+  return {
+    level,
+    min: minPointsForLevel(levelNumber),
+    title,
+    name: `${level} ${title}`,
+  };
+});
 
 const RULES = [
   { key: "register_profile", label: "注册并保存名片", points: 10, note: "足够升到 Lv.02" },
@@ -40,11 +66,13 @@ function getLevel(points) {
   }
   return {
     ...current,
+    name: `${current.level} ${current.title}`,
     points: score,
     nextLevel: next ? next.level : "",
     nextMin: next ? next.min : current.min,
     pointsToNext: next ? Math.max(next.min - score, 0) : 0,
     progress: next ? Math.min(Math.round(((score - current.min) / (next.min - current.min)) * 100), 100) : 100,
+    progressPercent: next ? Math.min(Math.round(((score - current.min) / (next.min - current.min)) * 100), 100) : 100,
   };
 }
 

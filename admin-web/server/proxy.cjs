@@ -185,6 +185,23 @@ function parseCommunityAccounts() {
 
 const communityAccounts = parseCommunityAccounts();
 
+const defaultExperienceRules = [
+  { rule_key: "register_profile", label: "注册并保存名片", description: "首次完成名片资料。", points: 10, status: "active", sort_order: 10 },
+  { rule_key: "card_viewed_by_other", label: "有人碰你的名片", description: "别人通过 NFC 或分享打开并保存你的名片。", points: 2, status: "active", sort_order: 20 },
+  { rule_key: "view_other_card", label: "你碰别人的名片", description: "你主动打开并保存别人的名片。", points: 1, status: "active", sort_order: 30 },
+  { rule_key: "share_card", label: "分享自己的名片", description: "分享呆猫名片。", points: 1, status: "active", sort_order: 40 },
+  { rule_key: "watch_project", label: "围观项目", description: "首次围观一个项目。", points: 1, status: "active", sort_order: 50 },
+  { rule_key: "apply_project", label: "提交项目申请", description: "提交一次有效项目申请。", points: 3, status: "active", sort_order: 60 },
+  { rule_key: "join_project", label: "被项目接受参与", description: "项目主理人接受申请。", points: 20, status: "active", sort_order: 70 },
+  { rule_key: "complete_project_task", label: "完成一次项目任务", description: "项目主理人确认任务完成。", points: 15, status: "active", sort_order: 80 },
+  { rule_key: "project_completed_member", label: "参与项目顺利完成", description: "作为成员参与并完成项目。", points: 50, status: "active", sort_order: 90 },
+  { rule_key: "project_completed_lead", label: "主理项目顺利完成", description: "作为主理人完成项目。", points: 120, status: "active", sort_order: 100 },
+  { rule_key: "attend_event", label: "参加一次活动", description: "活动签到或管理员确认。", points: 8, status: "active", sort_order: 110 },
+  { rule_key: "pass_review", label: "通过社区认证", description: "获得任一社区认证徽章。", points: 30, status: "active", sort_order: 120 },
+  { rule_key: "host_event", label: "协助组织活动", description: "管理员确认协助组织活动。", points: 40, status: "active", sort_order: 130 },
+  { rule_key: "positive_feedback", label: "获得正向协作反馈", description: "来自项目主理人或管理员的正向反馈。", points: 10, status: "active", sort_order: 140 },
+];
+
 function createSessionToken(account) {
   if (!sessionSecret) throw new Error("缺少 ADMIN_SESSION_SECRET 或 ADMIN_WEB_TOKEN，无法创建后台会话");
   const payload = base64url(JSON.stringify({
@@ -455,7 +472,7 @@ function businessData(data) {
 
 async function enrichAdminList(payload) {
   const userIds = (payload.users || []).map((item) => Number(item.id)).filter(Boolean);
-  const [communities, memberships, profiles, projectMembers, projectRecords, experienceEvents, referrals] = await Promise.all([
+  const [communities, memberships, profiles, projectMembers, projectRecords, experienceEvents, referrals, experienceRules] = await Promise.all([
     rdbSelect("communities", "*", (request) => request.order("sort_weight", { ascending: false }).limit(300)).catch(() => []),
     userIds.length ? rdbSelect("community_memberships", "*", (request) => request.in("user_id", userIds).limit(3000)).catch(() => []) : [],
     userIds.length ? rdbSelect("user_profiles", "*", (request) => request.in("user_id", userIds).limit(3000)).catch(() => []) : [],
@@ -463,6 +480,7 @@ async function enrichAdminList(payload) {
     userIds.length ? rdbSelect("project_records", "id,project_id,uploader_user_id,title,record_type,visibility,ai_process_status,created_at", (request) => request.in("uploader_user_id", userIds).order("created_at", { ascending: false }).limit(500)).catch(() => []) : [],
     userIds.length ? rdbSelect("user_experience_events", "*", (request) => request.in("user_id", userIds).order("created_at", { ascending: false }).limit(500)).catch(() => []) : [],
     userIds.length ? rdbSelect("user_referrals", "*", (request) => request.in("referred_user_id", userIds).eq("status", "active").limit(3000)).catch(() => []) : [],
+    rdbSelect("experience_rules", "*", (request) => request.order("sort_order", { ascending: true }).limit(200)).catch(() => defaultExperienceRules),
   ]);
   const referrerIds = [...new Set(referrals.map((item) => Number(item.referrer_user_id)).filter(Boolean))];
   const [referrerUsers, referrerProfiles] = await Promise.all([
@@ -507,6 +525,7 @@ async function enrichAdminList(payload) {
     projectMembers,
     projectRecords,
     experienceEvents,
+    experienceRules: experienceRules.length ? experienceRules : defaultExperienceRules,
     users: (payload.users || []).map((item) => ({
       ...item,
       profile: profilesByUser.get(Number(item.id)) || null,
@@ -629,6 +648,7 @@ async function adminUpdateUser(data) {
   if (patch.job !== undefined) profileValues.job = text(patch.job, 180);
   if (patch.wechat !== undefined) profileValues.wechat = text(patch.wechat, 120);
   if (patch.intro !== undefined) profileValues.intro = text(patch.intro, 3000);
+  if (patch.adminNote !== undefined) profileValues.admin_note = text(patch.adminNote, 10000);
   if (patch.profileTags !== undefined) profileValues.tags_json = json(tags(patch.profileTags), []);
   if (Object.keys(profileValues).length) {
     const existing = await rdbSelect("user_profiles", "id", (request) => request.eq("user_id", userId).limit(1)).catch(() => []);
@@ -776,11 +796,6 @@ async function adminUpdateCommunity(data) {
   if (patch.badgeName !== undefined) values.badge_name = text(patch.badgeName, 40);
   if (patch.description !== undefined) values.description = text(patch.description, 3000);
   if (patch.logoUrl !== undefined) values.logo_url = text(patch.logoUrl, 1000);
-  if (patch.certificationMethod !== undefined) {
-    values.certification_method = ["review_meeting", "paid_event", "admin_invite", "manual_review", "custom"].includes(patch.certificationMethod)
-      ? patch.certificationMethod
-      : "manual_review";
-  }
   if (patch.status !== undefined) values.status = ["paused", "archived"].includes(patch.status) ? patch.status : "active";
   if (patch.sortWeight !== undefined) values.sort_weight = Number(patch.sortWeight || 0);
   if (!Object.keys(values).length) return { success: true, saved: false };
@@ -798,7 +813,6 @@ async function adminUpdateCommunity(data) {
     badge_name: values.badge_name,
     description: values.description || "",
     logo_url: values.logo_url || "",
-    certification_method: values.certification_method || "manual_review",
     status: values.status || "active",
     sort_weight: values.sort_weight || 0,
   });
@@ -949,6 +963,33 @@ async function adminDeleteAdminAccount(data) {
   return { success: true, saved: true };
 }
 
+async function adminUpsertExperienceRule(data) {
+  const session = requireSuperAdmin(data);
+  const rule = data.rule || {};
+  const ruleKey = text(rule.ruleKey || rule.rule_key, 80);
+  if (!/^[a-z0-9_:-]{3,80}$/i.test(ruleKey)) {
+    const error = new Error("经验规则 key 格式不正确");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+  const values = {
+    rule_key: ruleKey,
+    label: text(rule.label, 120) || ruleKey,
+    description: text(rule.description, 500),
+    points: Number(rule.points || 0),
+    status: rule.status === "disabled" ? "disabled" : "active",
+    sort_order: Number(rule.sortOrder ?? rule.sort_order ?? 0),
+    updated_by: session.accountId || null,
+  };
+  const existing = await rdbSelect("experience_rules", "id", (request) => request.eq("rule_key", ruleKey).limit(1)).catch(() => []);
+  if (existing[0]) {
+    await rdbUpdate("experience_rules", values, (request) => request.eq("id", existing[0].id));
+  } else {
+    await rdbInsert("experience_rules", values);
+  }
+  return { success: true, saved: true, ruleKey };
+}
+
 async function saveCoverAfterBusiness(data, result) {
   if (!result || !result.success) return result;
   if (data.action === "adminCreateProject" && data.project && data.project.coverUrl !== undefined && result.projectId) {
@@ -983,6 +1024,10 @@ async function adminProxyAction(data) {
     await assertAdmin(data);
     if (data.action === "adminDeleteAdminAccount") return adminDeleteAdminAccount(data);
     return adminUpsertAdminAccount(data);
+  }
+  if (data.action === "adminUpsertExperienceRule") {
+    await assertAdmin(data);
+    return adminUpsertExperienceRule(data);
   }
   if (["adminUpdateUser", "adminDeleteUser", "adminSaveUserCommunity", "adminRevokeUserCommunity", "adminUpdateCommunity", "adminSetUserReferral"].includes(data.action)) {
     await assertAdmin(data);

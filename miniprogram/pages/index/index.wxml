@@ -285,6 +285,13 @@
           <view wx:for="{{cardProfile.tags}}" wx:key="*this" class="tag">{{item}}</view>
         </view>
 
+        <view wx:if="{{cardProfile.communities && cardProfile.communities.length}}" class="community-badge-row">
+          <view wx:for="{{cardProfile.communities}}" wx:key="id" class="community-badge mini">
+            <image wx:if="{{item.logoUrl}}" src="{{item.logoUrl}}" mode="aspectFill" />
+            <text>{{item.badge || item.name}}</text>
+          </view>
+        </view>
+
         <view class="qa-list">
           <block wx:for="{{cardProfile.answers}}" wx:key="q">
             <view wx:if="{{index < 3}}" class="qa-item">

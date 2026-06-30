@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   wechat VARCHAR(120) NOT NULL DEFAULT '',
   avatar_url VARCHAR(512) NOT NULL DEFAULT '',
   intro VARCHAR(500) NOT NULL DEFAULT '',
+  admin_note TEXT NULL,
   answers_json JSON NULL,
   tags_json JSON NULL,
   sticker_code VARCHAR(80) NOT NULL DEFAULT '',
@@ -184,6 +185,23 @@ CREATE TABLE IF NOT EXISTS user_experience_events (
   PRIMARY KEY (id),
   KEY idx_experience_user (user_id, created_at),
   CONSTRAINT fk_experience_user FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS experience_rules (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  rule_key VARCHAR(80) NOT NULL,
+  label VARCHAR(120) NOT NULL,
+  description VARCHAR(500) NOT NULL DEFAULT '',
+  points INT NOT NULL DEFAULT 0,
+  status ENUM('active','disabled') NOT NULL DEFAULT 'active',
+  sort_order INT NOT NULL DEFAULT 0,
+  updated_by BIGINT UNSIGNED NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_experience_rules_key (rule_key),
+  KEY idx_experience_rules_status (status, sort_order),
+  CONSTRAINT fk_experience_rules_updated_by FOREIGN KEY (updated_by) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS projects (

@@ -30,7 +30,10 @@
     </view>
     <view class="level-next">{{levelNextText}}</view>
     <view wx:if="{{identity.communities.length}}" class="community-list">
-      <text wx:for="{{identity.communities}}" wx:key="id">{{item.badge || item.name}}</text>
+      <view wx:for="{{identity.communities}}" wx:key="id" class="community-badge">
+        <image wx:if="{{item.logoUrl}}" src="{{item.logoUrl}}" mode="aspectFill" />
+        <text>{{item.badge || item.name}}</text>
+      </view>
     </view>
     <view wx:else class="community-hint">通过任一社区认证后，可以申请参与公开项目。</view>
   </view>

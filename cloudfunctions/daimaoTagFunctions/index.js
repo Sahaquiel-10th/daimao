@@ -370,7 +370,7 @@ function parseJson(value, fallback) {
   }
 }
 
-function publicSqlProfile(user, profile) {
+function publicSqlProfile(user, profile, communities = []) {
   if (!user || !profile) return null;
   return {
     id: user.openid || String(user.id || ""),
@@ -385,7 +385,39 @@ function publicSqlProfile(user, profile) {
     stickerCode: profile.sticker_code || "",
     agreementVersion: profile.agreement_version || "",
     profileStatus: profile.profile_status || "",
+    communities,
   };
+}
+
+async function getUserCommunities(userId) {
+  if (!userId || !SQL_SYNC_ENABLED) return [];
+  try {
+    const memberships = await rdbSelect("community_memberships", "*", (request) =>
+      request.eq("user_id", userId).eq("status", "active").limit(100)
+    );
+    const communityIds = [...new Set(memberships.map((item) => Number(item.community_id)).filter(Boolean))];
+    if (!communityIds.length) return [];
+    const communities = await rdbSelect("communities", "*", (request) =>
+      request.in("id", communityIds).eq("status", "active").limit(100)
+    );
+    const byId = new Map(communities.map((item) => [Number(item.id), item]));
+    return memberships
+      .map((item) => {
+        const community = byId.get(Number(item.community_id));
+        if (!community) return null;
+        return {
+          id: item.community_id,
+          name: community.name || "",
+          badge: community.badge_name || "",
+          logoUrl: community.logo_url || "",
+          tags: parseJson(item.tags_json, []),
+        };
+      })
+      .filter(Boolean);
+  } catch (err) {
+    console.warn("load user communities failed", err.message);
+    return [];
+  }
 }
 
 async function getSqlProfileByOpenid(openid) {
@@ -396,7 +428,7 @@ async function getSqlProfileByOpenid(openid) {
   const profiles = await rdbSelect("user_profiles", "*", (request) => request.eq("user_id", user.id).limit(1));
   const profile = profiles[0];
   if (!profile) return null;
-  return publicSqlProfile(user, profile);
+  return publicSqlProfile(user, profile, await getUserCommunities(user.id));
 }
 
 async function getCurrentProfileForDisplay() {
@@ -824,20 +856,23 @@ async function getMyConnections() {
     if (!existing || rowTime >= existingTime) latestConnectionByFriend.set(friendId, row);
   });
 
-  const result = Array.from(latestConnectionByFriend.entries())
-    .map(([friendId, connection]) => {
-      const user = usersById.get(friendId);
-      const profile = profilesByUserId.get(friendId);
-      const publicProfileData = publicSqlProfile(user, profile);
-      if (!publicProfileData || publicProfileData.agreementVersion !== AGREEMENT_VERSION) return null;
-      return {
-        ...publicProfileData,
-        anonymous: false,
-        metAt: connection.last_met_at || connection.updated_at || connection.created_at || "",
-        source: connection.source || "other",
-        visitCount: Number(connection.visit_count || 1),
-      };
-    })
+  const result = (
+    await Promise.all(
+      Array.from(latestConnectionByFriend.entries()).map(async ([friendId, connection]) => {
+        const user = usersById.get(friendId);
+        const profile = profilesByUserId.get(friendId);
+        const publicProfileData = publicSqlProfile(user, profile, await getUserCommunities(user && user.id));
+        if (!publicProfileData || publicProfileData.agreementVersion !== AGREEMENT_VERSION) return null;
+        return {
+          ...publicProfileData,
+          anonymous: false,
+          metAt: connection.last_met_at || connection.updated_at || connection.created_at || "",
+          source: connection.source || "other",
+          visitCount: Number(connection.visit_count || 1),
+        };
+      })
+    )
+  )
     .filter(Boolean)
     .sort((a, b) => new Date(b.metAt).getTime() - new Date(a.metAt).getTime());
 

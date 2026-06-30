@@ -1127,6 +1127,35 @@ button::after {
   font-weight: 700;
 }
 
+.community-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-top: 14rpx;
+  max-height: 66rpx;
+  overflow: hidden;
+}
+
+.community-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
+  padding: 6rpx 12rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 999rpx;
+  background: #fff8e8;
+  color: #2d685f;
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
+.community-badge image {
+  width: 28rpx;
+  height: 28rpx;
+  border-radius: 50%;
+  background: #f5ead8;
+}
+
 .qa-list {
   margin-top: 14rpx;
 }

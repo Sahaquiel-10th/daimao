@@ -29,6 +29,7 @@ const tabs = [
   { key: "projects", label: "项目", icon: Database },
   { key: "events", label: "活动", icon: CalendarDays },
   { key: "pending", label: "待处理", icon: CheckCircle2 },
+  { key: "experience", label: "经验", icon: Star, superOnly: true },
   { key: "rag", label: "RAG", icon: Search },
   { key: "logs", label: "日志", icon: FileText, superOnly: true },
 ];
@@ -223,6 +224,7 @@ function userDraftFrom(user) {
     job: profile.job || "",
     wechat: profile.wechat || "",
     intro: profile.intro || "",
+    adminNote: profile.admin_note || "",
     profileTags: (profile.tags || []).join(" "),
     referrerUserCode: user?.referral?.referrer_public_user_code || "",
     referralNote: user?.referral?.note || "",
@@ -236,7 +238,6 @@ function communityDraftFrom(community) {
     badgeName: community?.badge_name || "",
     logoUrl: community?.logo_url || "",
     description: community?.description || "",
-    certificationMethod: community?.certification_method || "manual_review",
     status: community?.status || "active",
     sortWeight: Number(community?.sort_weight || 0),
   };
@@ -249,7 +250,6 @@ function emptyCommunityDraft() {
     badgeName: "",
     logoUrl: "",
     description: "",
-    certificationMethod: "manual_review",
     status: "active",
     sortWeight: 0,
   };
@@ -920,6 +920,23 @@ export default function App() {
           </section>
         )}
 
+        {activeTab === "experience" && (
+          <section className="content-grid">
+            <section className="panel dm-card">
+              <h3>经验规则</h3>
+              <p className="muted small-muted">
+                这里只控制未来发生的动作加多少分；已经写入用户的历史经验不会回滚或重算。等级采用递增曲线，等级越高越难升级。
+              </p>
+              <ExperienceRuleTable
+                rules={data?.experienceRules || []}
+                onSave={(rule) =>
+                  run("adminUpsertExperienceRule", { rule }, "经验规则已保存")
+                }
+              />
+            </section>
+          </section>
+        )}
+
         {activeTab === "rag" && (
           <section className="content-grid">
             <section className="panel dm-card">
@@ -1103,11 +1120,18 @@ function UserEditor({
       <Field label="身份/职业">
         <input value={draft.job} onChange={(event) => onChange({ ...draft, job: event.target.value })} />
       </Field>
-      <Field label="运营标签">
+      <Field label="用户标签">
         <input value={draft.profileTags} onChange={(event) => onChange({ ...draft, profileTags: event.target.value })} placeholder="用空格分隔" />
       </Field>
-      <Field label="运营备注">
+      <Field label="个人简介（名片公开）">
         <textarea value={draft.intro} onChange={(event) => onChange({ ...draft, intro: event.target.value })} />
+      </Field>
+      <Field label="用户备注（后台可见）">
+        <textarea
+          value={draft.adminNote || ""}
+          onChange={(event) => onChange({ ...draft, adminNote: event.target.value })}
+          placeholder="只给后台管理员看，不会展示给用户，也不会作为公开名片内容。"
+        />
       </Field>
       <button className="primary-button" onClick={onSubmit}>保存用户资料</button>
       <div className="editor-divider" />
@@ -1409,15 +1433,6 @@ function CommunityEditor({ draft, readOnly = false, onChange, onSubmit, onUpload
           <option value="active">启用</option>
           <option value="paused">暂停</option>
           <option value="archived">归档</option>
-        </select>
-      </Field>
-      <Field label="认证方式">
-        <select disabled={readOnly} value={draft.certificationMethod} onChange={(event) => onChange({ ...draft, certificationMethod: event.target.value })}>
-          <option value="manual_review">人工审核</option>
-          <option value="review_meeting">评审会通过</option>
-          <option value="paid_event">参加付费活动</option>
-          <option value="admin_invite">管理员邀请</option>
-          <option value="custom">自定义</option>
         </select>
       </Field>
       <Field label="排序权重">
@@ -1838,6 +1853,98 @@ function PendingTable({ items }) {
           </tr>
         )) : (
           <tr><td colSpan="5"><EmptyState title="暂无待处理事项">没有待审核申请、候选证据或待索引任务。</EmptyState></td></tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function ExperienceRuleTable({ rules, onSave }) {
+  const [editingKey, setEditingKey] = useState("");
+  const [draft, setDraft] = useState(null);
+  const sorted = [...(rules || [])].sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+
+  function startEdit(rule) {
+    setEditingKey(rule.rule_key);
+    setDraft({
+      ruleKey: rule.rule_key,
+      label: rule.label || "",
+      description: rule.description || "",
+      points: Number(rule.points || 0),
+      status: rule.status || "active",
+      sortOrder: Number(rule.sort_order || 0),
+    });
+  }
+
+  function cancelEdit() {
+    setEditingKey("");
+    setDraft(null);
+  }
+
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>动作</th>
+          <th>说明</th>
+          <th>分值</th>
+          <th>状态</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.length ? sorted.map((rule) => {
+          const isEditing = editingKey === rule.rule_key && draft;
+          return (
+            <tr key={rule.rule_key}>
+              <td>
+                {isEditing ? (
+                  <input value={draft.label} onChange={(event) => setDraft({ ...draft, label: event.target.value })} />
+                ) : (
+                  <div className="title-stack">
+                    <strong>{rule.label}</strong>
+                    <span>{rule.rule_key}</span>
+                  </div>
+                )}
+              </td>
+              <td className="muted-cell">
+                {isEditing ? (
+                  <input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} />
+                ) : (
+                  rule.description || "-"
+                )}
+              </td>
+              <td>
+                {isEditing ? (
+                  <input type="number" value={draft.points} onChange={(event) => setDraft({ ...draft, points: event.target.value })} />
+                ) : (
+                  `+${rule.points || 0}`
+                )}
+              </td>
+              <td>
+                {isEditing ? (
+                  <select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value })}>
+                    <option value="active">启用</option>
+                    <option value="disabled">停用</option>
+                  </select>
+                ) : (
+                  <Badge tone={rule.status === "active" ? "green" : "red"}>{statusLabel(rule.status)}</Badge>
+                )}
+              </td>
+              <td>
+                {isEditing ? (
+                  <div className="inline-actions">
+                    <button type="button" onClick={() => onSave(draft).then(cancelEdit)}>保存</button>
+                    <button type="button" onClick={cancelEdit}>取消</button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => startEdit(rule)}>编辑</button>
+                )}
+              </td>
+            </tr>
+          );
+        }) : (
+          <tr><td colSpan="5"><EmptyState title="暂无经验规则">请先执行经验规则迁移。</EmptyState></td></tr>
         )}
       </tbody>
     </table>

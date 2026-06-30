@@ -1140,13 +1140,14 @@ async function getCommunityMemberships(userId) {
             ...item,
             name: community.name,
             badge_name: community.badge_name,
+            logo_url: community.logo_url || "",
             personality_tags_json: community.personality_tags_json,
           };
         })
         .filter(Boolean);
     }
     return await query(
-      `SELECT cm.*, c.name, c.badge_name, c.personality_tags_json
+      `SELECT cm.*, c.name, c.badge_name, c.logo_url, c.personality_tags_json
        FROM community_memberships cm
        JOIN communities c ON c.id = cm.community_id
        WHERE cm.user_id = ? AND cm.status = 'active' AND c.status = 'active'
@@ -1267,6 +1268,7 @@ async function getMyIdentity(event, user) {
         id: item.community_id,
         name: item.name,
         badge: item.badge_name,
+        logoUrl: item.logo_url || "",
         personality: parseJson(item.personality_tags_json, []).join("、"),
         tags: parseJson(item.tags_json, []),
       })),

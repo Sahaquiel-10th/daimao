@@ -104,14 +104,25 @@
   margin-top: 18rpx;
 }
 
-.community-list text {
-  padding: 8rpx 14rpx;
+.community-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
+  min-height: 42rpx;
+  padding: 6rpx 12rpx;
   border: 2rpx solid #23211f;
   border-radius: 999rpx;
   background: #fffdfa;
   color: #2d685f;
   font-size: 22rpx;
   font-weight: 900;
+}
+
+.community-badge image {
+  width: 28rpx;
+  height: 28rpx;
+  border-radius: 50%;
+  background: #f5ead8;
 }
 
 .inline-title {
