@@ -7,6 +7,7 @@ import {
   Database,
   FileText,
   Lock,
+  LogOut,
   RefreshCw,
   Search,
   Shield,
@@ -192,7 +193,8 @@ function assetSrc(primary, fallback) {
 function isSessionError(err) {
   const code = err && err.code;
   const message = String((err && err.message) || "");
-  return ["LOGIN_FAILED", "LOGIN_NOT_CONFIGURED", "FORBIDDEN", "UNAUTHORIZED"].includes(code) || /请先登录后台|登录失败|会话|session/i.test(message);
+  return ["LOGIN_FAILED", "LOGIN_NOT_CONFIGURED", "FORBIDDEN", "UNAUTHORIZED", "LOGIN_REQUIRED"].includes(code)
+    || /请先登录后台|登录失败|会话|session|无法识别当前微信用户/i.test(message);
 }
 
 function officialDisplayOrder(weight) {
@@ -297,9 +299,17 @@ export default function App() {
 
   function showError(err, fallback = "操作失败") {
     const message = (err && err.message) || fallback;
+    const needsLogin = isSessionError(err);
     setError(message);
-    setErrorNeedsLogin(isSessionError(err));
+    setErrorNeedsLogin(needsLogin);
     setToast({ type: "error", message });
+    if (needsLogin) {
+      saveToken("");
+      saveAccessKey("");
+      setPasswordInput("");
+      setAuthed(false);
+      setData(null);
+    }
   }
 
   async function refresh() {
@@ -594,6 +604,10 @@ export default function App() {
             </div>
             <button className="icon-button" onClick={refresh} disabled={loading} title="刷新">
               <RefreshCw size={18} />
+            </button>
+            <button type="button" onClick={resetCredentials} title="退出登录">
+              <LogOut size={16} />
+              退出
             </button>
           </div>
         </header>

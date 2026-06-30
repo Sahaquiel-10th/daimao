@@ -964,8 +964,9 @@ async function saveCoverAfterBusiness(data, result) {
 }
 
 async function adminProxyAction(data) {
-  const session = sessionFromData(data);
   if (data.action === "adminList") {
+    await assertAdmin(data);
+    const session = sessionFromData(data);
     const result = await callBusiness(businessData(data));
     if (!result || !result.success) return result;
     const enriched = await enrichAdminList(result);
