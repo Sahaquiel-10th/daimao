@@ -1911,6 +1911,27 @@ async function publishUpdate(event, user) {
   return { updateId: result.insertId };
 }
 
+async function updateProjectUpdate(event, user) {
+  const projectId = id(event.projectId);
+  const updateId = id(event.updateId);
+  const role = await requireProjectMember(projectId, user.id);
+  const rows = await query("SELECT * FROM project_updates WHERE id=? AND project_id=? LIMIT 1", [updateId, projectId]);
+  const existing = rows[0];
+  if (!existing) throw codedError("UPDATE_NOT_FOUND", "这条项目进度不存在");
+  const canEdit = role.isCreator || user.is_admin || Number(existing.creator_user_id) === Number(user.id);
+  if (!canEdit) throw codedError("FORBIDDEN", "只有项目主理人、管理员或发布者可以编辑项目进度");
+  const input = event.update || {};
+  const title = text(input.title, 180);
+  const content = text(input.content, 10000);
+  if (!title || !content) throw codedError("VALIDATION_ERROR", "进度标题和内容不能为空");
+  const visibility = input.visibility === "public" ? "public" : "project_members";
+  await query(
+    "UPDATE project_updates SET title=?, content=?, visibility=?, update_type=?, updated_at=NOW() WHERE id=? AND project_id=?",
+    [title, content, visibility, text(input.updateType, 40) || existing.update_type || "progress", updateId, projectId]
+  );
+  return { updateId };
+}
+
 async function createMeetingRequest(event, user) {
   const projectId = id(event.projectId);
   const projects = await query("SELECT creator_user_id, name, description FROM projects WHERE id = ? LIMIT 1", [projectId]);
@@ -2256,7 +2277,9 @@ async function getProjectSpace(event, user) {
        WHERE pm.project_id=? AND pm.status IN ('active','invited') ORDER BY pm.role='creator' DESC, pm.joined_at`,
       [projectId]
     ),
-    query("SELECT * FROM project_updates WHERE project_id=? AND visibility='project_members' ORDER BY created_at DESC LIMIT 50", [projectId]),
+    query("SELECT * FROM project_updates WHERE project_id=? AND visibility IN ('project_members','public') ORDER BY created_at DESC LIMIT 50", [
+      projectId,
+    ]),
     query("SELECT id,title,record_type,ai_process_status,created_at FROM project_records WHERE project_id=? ORDER BY created_at DESC LIMIT 50", [projectId]),
     query("SELECT * FROM reminder_intents WHERE project_id=? AND status='pending' ORDER BY created_at DESC LIMIT 50", [projectId]),
     query("SELECT * FROM project_events WHERE project_id=? AND status='active' ORDER BY start_time ASC LIMIT 50", [projectId]),
@@ -2848,6 +2871,169 @@ async function adminCreateProjectMemberReview(event, user) {
   });
   await adminLog(user, "create_project_member_review", "project_member_review", reviewId, { projectId, reviewedUserId });
   return { reviewId, rag: ragResult };
+}
+
+function adminProjectUpdatePayload(input = {}) {
+  const title = text(input.title, 180);
+  const content = text(input.content, 20000);
+  if (!title || !content) throw codedError("VALIDATION_ERROR", "项目动态标题和内容不能为空");
+  return {
+    title,
+    content,
+    visibility: input.visibility === "public" ? "public" : input.visibility === "admin_only" ? "admin_only" : "project_members",
+    update_type: ["progress", "milestone", "meeting_summary", "resource_update", "announcement", "other"].includes(input.updateType || input.update_type)
+      ? (input.updateType || input.update_type)
+      : "progress",
+    status: input.status === "draft" ? "draft" : "published",
+  };
+}
+
+function adminProjectMemberPayload(input = {}, operatorUserId) {
+  const status = ["invited", "active", "rejected", "removed", "left"].includes(input.status) ? input.status : "active";
+  return {
+    role: ["creator", "member", "observer", "advisor", "executor", "resource_provider"].includes(input.role) ? input.role : "member",
+    status,
+    invited_by: operatorUserId || null,
+    joined_at: status === "active" ? (input.joinedAt ? sqlDateTime(input.joinedAt) : nowDateTime()) : null,
+  };
+}
+
+async function adminGetProjectManagement(event, user) {
+  await requireAdmin(user);
+  if (!useRdb()) throw codedError("RDB_REQUIRED", "项目管理后台接口需要 CloudBase RDB");
+  const projectId = id(event.projectId);
+  const [projectRows, memberRows, updateRows, reviewRows] = await Promise.all([
+    rdbSelect("projects", "*", (request) => request.eq("id", projectId).limit(1)),
+    rdbSelect("project_members", "*", (request) => request.eq("project_id", projectId).order("created_at", { ascending: true }).limit(500)),
+    rdbSelect("project_updates", "*", (request) => request.eq("project_id", projectId).order("created_at", { ascending: false }).limit(200)),
+    rdbSelect("project_member_reviews", "*", (request) => request.eq("project_id", projectId).order("updated_at", { ascending: false }).limit(500)).catch(() => []),
+  ]);
+  const project = projectRows[0];
+  if (!project) throw codedError("PROJECT_NOT_FOUND", "项目不存在");
+  const userIds = unique([
+    project.creator_user_id,
+    ...memberRows.map((item) => item.user_id),
+    ...updateRows.map((item) => item.creator_user_id),
+    ...reviewRows.map((item) => item.reviewer_user_id),
+    ...reviewRows.map((item) => item.reviewed_user_id),
+  ]).map(Number).filter(Boolean);
+  const users = userIds.length
+    ? await rdbSelect("users", "id,public_user_code,display_name,avatar_url,status", (request) => request.in("id", userIds).limit(1000))
+    : [];
+  const profiles = userIds.length
+    ? await rdbSelect("user_profiles", "user_id,name,job,avatar_url", (request) => request.in("user_id", userIds).limit(1000)).catch(() => [])
+    : [];
+  const profileMap = new Map(profiles.map((item) => [Number(item.user_id), item]));
+  const userMap = new Map(users.map((item) => {
+    const profile = profileMap.get(Number(item.id)) || {};
+    return [Number(item.id), {
+      ...item,
+      name: profile.name || item.display_name || "",
+      job: profile.job || "",
+      avatar_url: profile.avatar_url || item.avatar_url || "",
+    }];
+  }));
+  const withUser = (row, key = "user_id", field = "user") => ({ ...row, [field]: userMap.get(Number(row[key])) || null });
+  return {
+    project: { ...project, tags: parseJson(project.tags_json, []) },
+    members: memberRows.map((item) => withUser(item)),
+    updates: updateRows.map((item) => withUser(item, "creator_user_id", "creator")),
+    reviews: reviewRows.map((item) => ({
+      ...item,
+      reviewer: userMap.get(Number(item.reviewer_user_id)) || null,
+      reviewed: userMap.get(Number(item.reviewed_user_id)) || null,
+    })),
+  };
+}
+
+async function adminUpsertProjectMember(event, user) {
+  await requireAdmin(user);
+  if (!useRdb()) throw codedError("RDB_REQUIRED", "项目成员后台接口需要 CloudBase RDB");
+  const projectId = id(event.projectId);
+  const memberUserId = id(event.userId || event.memberUserId);
+  await Promise.all([findProjectById(projectId), findUserById(memberUserId)]);
+  const values = {
+    project_id: projectId,
+    user_id: memberUserId,
+    ...adminProjectMemberPayload(event.member || event.patch || event, user.id),
+  };
+  await rdbUpsert("project_members", values);
+  await adminLog(user, "upsert_project_member", "project", projectId, { memberUserId, role: values.role, status: values.status });
+  return { saved: true, projectId, userId: memberUserId };
+}
+
+async function adminCreateProjectUpdate(event, user) {
+  await requireAdmin(user);
+  if (!useRdb()) throw codedError("RDB_REQUIRED", "项目动态后台接口需要 CloudBase RDB");
+  const projectId = id(event.projectId);
+  await findProjectById(projectId);
+  const payload = adminProjectUpdatePayload(event.update || {});
+  await rdbInsert("project_updates", {
+    project_id: projectId,
+    creator_user_id: user.id,
+    ...payload,
+  });
+  const rows = await rdbSelect("project_updates", "id", (request) =>
+    request.eq("project_id", projectId).eq("creator_user_id", user.id).order("created_at", { ascending: false }).limit(1)
+  );
+  const updateId = rows[0] && rows[0].id;
+  await adminLog(user, "create_project_update", "project_update", updateId, { projectId, visibility: payload.visibility });
+  return { updateId };
+}
+
+async function adminUpdateProjectUpdate(event, user) {
+  await requireAdmin(user);
+  if (!useRdb()) throw codedError("RDB_REQUIRED", "项目动态后台接口需要 CloudBase RDB");
+  const projectId = id(event.projectId);
+  const updateId = id(event.updateId);
+  const rows = await rdbSelect("project_updates", "*", (request) => request.eq("id", updateId).eq("project_id", projectId).limit(1));
+  if (!rows[0]) throw codedError("UPDATE_NOT_FOUND", "项目动态不存在");
+  const payload = adminProjectUpdatePayload(event.update || {});
+  await rdbUpdate("project_updates", payload, (request) => request.eq("id", updateId).eq("project_id", projectId));
+  await adminLog(user, "update_project_update", "project_update", updateId, { projectId, visibility: payload.visibility });
+  return { updateId };
+}
+
+async function adminCompleteProject(event, user) {
+  await requireAdmin(user);
+  if (!useRdb()) throw codedError("RDB_REQUIRED", "项目完结后台接口需要 CloudBase RDB");
+  const projectId = id(event.projectId);
+  const project = await findProjectById(projectId);
+  const summary = text(event.summary || event.completionSummary || "", 30000);
+  if (!summary) throw codedError("VALIDATION_ERROR", "项目完结总结不能为空");
+  await rdbUpdate("projects", {
+    status: "completed",
+    completion_summary: summary,
+    completed_at: nowDateTime(),
+    completed_by_user_id: user.id,
+  }, (request) => request.eq("id", projectId));
+  await rdbInsert("project_updates", {
+    project_id: projectId,
+    creator_user_id: user.id,
+    title: event.updateTitle ? text(event.updateTitle, 180) : `项目完结：${project.name}`,
+    content: summary,
+    visibility: event.visibility === "public" ? "public" : "project_members",
+    update_type: "milestone",
+    status: "published",
+  }).catch(() => {});
+
+  const reviews = Array.isArray(event.memberReviews) ? event.memberReviews : [];
+  const reviewResults = [];
+  for (const item of reviews) {
+    const reviewedUserId = item.reviewedUserId || item.userId || item.memberUserId;
+    const contribution = text(item.contributionText || item.contribution, 30000);
+    if (!reviewedUserId || !contribution) continue;
+    const result = await adminCreateProjectMemberReview({
+      projectId,
+      reviewedUserId,
+      reviewerUserId: item.reviewerUserId || user.id,
+      review: item,
+      tags: item.tags || ["project_completed"],
+    }, user);
+    reviewResults.push(result);
+  }
+  await adminLog(user, "complete_project", "project", projectId, { reviewCount: reviewResults.length });
+  return { saved: true, projectId, reviewCount: reviewResults.length, reviews: reviewResults };
 }
 
 function adminEvidenceSourceType(evidenceType) {
@@ -4919,6 +5105,7 @@ const actions = {
   processRagIndexJobs,
   toggleWatch,
   publishUpdate,
+  updateProjectUpdate,
   createMeetingRequest,
   respondMeetingRequest,
   respondProjectApplication,
@@ -4943,6 +5130,11 @@ const actions = {
   adminListProjects,
   adminCreateProject,
   adminUpdateProject,
+  adminGetProjectManagement,
+  adminUpsertProjectMember,
+  adminCreateProjectUpdate,
+  adminUpdateProjectUpdate,
+  adminCompleteProject,
   adminListEvents,
   adminCreateEvent,
   adminUpdateEvent,

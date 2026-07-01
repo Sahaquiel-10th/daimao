@@ -384,6 +384,25 @@ async function assertEvidenceInSessionCommunities(data, evidenceId) {
   return assertUserInSessionCommunities(data, evidence.user_id);
 }
 
+async function assertProjectInSessionCommunities(data, projectId) {
+  const rows = await rdbSelect("projects", "id,community_id", (request) => request.eq("id", id(projectId, "projectId")).limit(1)).catch(() => []);
+  const project = rows[0];
+  if (!project) {
+    const error = new Error("项目不存在");
+    error.code = "NOT_FOUND";
+    throw error;
+  }
+  requireCommunityAccess(data, project.community_id);
+  return project;
+}
+
+async function assertProjectMemberUserAllowed(data, projectId, userId) {
+  const session = sessionFromData(data);
+  if (!session || session.role === "super_admin") return;
+  await assertProjectInSessionCommunities(data, projectId);
+  await assertUserInSessionCommunities(data, userId);
+}
+
 async function assertScopedBusinessAction(data) {
   const session = sessionFromData(data);
   if (!session || session.role === "super_admin") return;
@@ -422,6 +441,20 @@ async function assertScopedBusinessAction(data) {
     requireCommunityAccess(data, project.community_id);
     if (patchCommunityId !== undefined) requireCommunityAccess(data, patchCommunityId);
     if (patchCreatorUserId) await assertUserInSessionCommunities(data, patchCreatorUserId);
+    return;
+  }
+  if (["adminGetProjectManagement", "adminCreateProjectUpdate", "adminUpdateProjectUpdate", "adminCompleteProject"].includes(action)) {
+    await assertProjectInSessionCommunities(data, data.projectId);
+    return;
+  }
+  if (action === "adminUpsertProjectMember") {
+    const memberUserId = data.userId || data.memberUserId;
+    await assertProjectMemberUserAllowed(data, data.projectId, memberUserId);
+    return;
+  }
+  if (action === "adminCreateProjectMemberReview") {
+    const reviewedUserId = data.reviewedUserId || data.userId;
+    await assertProjectMemberUserAllowed(data, data.projectId, reviewedUserId);
     return;
   }
   if (action === "adminCreateEvent") {
@@ -594,6 +627,8 @@ function applyAdminScope(payload, session) {
   const ragIndexJobs = (payload.ragIndexJobs || []).filter((item) => allowedSourceIds.has(Number(item.source_id)));
   const projects = (payload.projects || []).filter((item) => allowed.has(Number(item.community_id)));
   const allowedProjectIds = new Set(projects.map((item) => Number(item.id)));
+  const projectMembers = (payload.projectMembers || []).filter((item) => allowedProjectIds.has(Number(item.project_id)));
+  const projectRecords = (payload.projectRecords || []).filter((item) => allowedProjectIds.has(Number(item.project_id)));
   const projectApplications = (payload.projectApplications || []).filter((item) => allowedProjectIds.has(Number(item.project_id)));
   const events = (payload.events || []).filter((item) => allowed.has(Number(item.community_id)));
   const referrals = (payload.referrals || []).filter(
@@ -606,6 +641,8 @@ function applyAdminScope(payload, session) {
     communityMemberships,
     users,
     projects,
+    projectMembers,
+    projectRecords,
     projectApplications,
     events,
     referrals,

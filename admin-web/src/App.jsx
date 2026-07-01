@@ -300,6 +300,7 @@ export default function App() {
   const [adminDraft, setAdminDraft] = useState(null);
   const [evidenceDraft, setEvidenceDraft] = useState(null);
   const [projectDraft, setProjectDraft] = useState(null);
+  const [projectManage, setProjectManage] = useState(null);
   const [eventDraft, setEventDraft] = useState(null);
   const [toast, setToast] = useState(null);
   const [errorNeedsLogin, setErrorNeedsLogin] = useState(false);
@@ -485,6 +486,48 @@ export default function App() {
       setToast({ type: "success", message: "图片已上传，记得保存当前表单" });
     } catch (err) {
       showError(err, "上传失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function openProjectManagement(project) {
+    setLoading(true);
+    setError("");
+    setErrorNeedsLogin(false);
+    try {
+      const result = await callAdmin("adminGetProjectManagement", { projectId: project.id });
+      setProjectManage(result);
+      setToast({ type: "success", message: "项目管理数据已加载" });
+    } catch (err) {
+      showError(err, "项目管理数据加载失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function reloadProjectManagement(projectId) {
+    const result = await callAdmin("adminGetProjectManagement", { projectId });
+    setProjectManage(result);
+    return result;
+  }
+
+  async function runProjectAction(action, payload, successMessage) {
+    setLoading(true);
+    setError("");
+    setErrorNeedsLogin(false);
+    setToast({ type: "info", message: "正在保存..." });
+    try {
+      await callAdmin(action, payload);
+      await Promise.all([
+        refresh(),
+        payload.projectId ? reloadProjectManagement(payload.projectId) : Promise.resolve(),
+      ]);
+      setToast({ type: "success", message: successMessage || "项目已更新" });
+      return true;
+    } catch (err) {
+      showError(err, "项目操作失败");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -896,7 +939,13 @@ export default function App() {
                 <h3>项目管理</h3>
                 <button type="button" onClick={createProjectDraft}>新建项目</button>
               </div>
-              <ProjectTable projects={filteredProjects} onEdit={setProjectDraft} communities={data?.communities || []} users={data?.users || []} />
+              <ProjectTable
+                projects={filteredProjects}
+                onEdit={setProjectDraft}
+                onManage={openProjectManagement}
+                communities={data?.communities || []}
+                users={data?.users || []}
+              />
             </section>
             {projectDraft && (
               <Modal title={projectDraft.id ? "编辑项目" : "新建项目"} onClose={() => setProjectDraft(null)}>
@@ -920,6 +969,20 @@ export default function App() {
                       if (ok) setProjectDraft(null);
                     });
                   }}
+                />
+              </Modal>
+            )}
+            {projectManage && (
+              <Modal title={`项目管理：${projectManage.project?.name || projectManage.project?.id || ""}`} onClose={() => setProjectManage(null)}>
+                <ProjectManagementPanel
+                  data={projectManage}
+                  users={data?.users || []}
+                  communities={data?.communities || []}
+                  onReload={() => reloadProjectManagement(projectManage.project.id)}
+                  onSaveMember={(payload) => runProjectAction("adminUpsertProjectMember", payload, "项目成员已保存")}
+                  onSaveUpdate={(payload) => runProjectAction("adminCreateProjectUpdate", payload, "项目动态已发布")}
+                  onSaveReview={(payload) => runProjectAction("adminCreateProjectMemberReview", payload, "成员贡献备注已写入密封证据链")}
+                  onComplete={(payload) => runProjectAction("adminCompleteProject", payload, "项目已完结，成员评价已入证据链")}
                 />
               </Modal>
             )}
@@ -1645,7 +1708,352 @@ function CommunityEvidenceEditor({ draft, onChange, onFile, onSubmit }) {
   );
 }
 
-function ProjectTable({ projects, onEdit, communities = [], users = [] }) {
+function ProjectUserLabel({ user }) {
+  if (!user) return <span className="muted">未知用户</span>;
+  const code = user.public_user_code || String(user.id || "").padStart(3, "0");
+  return (
+    <div className="title-stack">
+      <strong>{user.name || user.display_name || user.profile?.name || `用户 ${code}`}</strong>
+      <span>ID {code}{user.job ? ` · ${user.job}` : ""}</span>
+    </div>
+  );
+}
+
+function ProjectManagementPanel({ data, users = [], communities = [], onReload, onSaveMember, onSaveUpdate, onSaveReview, onComplete }) {
+  const project = data?.project || {};
+  const projectId = project.id;
+  const members = data?.members || [];
+  const updates = data?.updates || [];
+  const reviews = data?.reviews || [];
+  const [memberDraft, setMemberDraft] = useState({ userId: "", role: "member", status: "active" });
+  const [updateDraft, setUpdateDraft] = useState({
+    title: "",
+    content: "",
+    visibility: "project_members",
+    updateType: "progress",
+    status: "published",
+  });
+  const [reviewDraft, setReviewDraft] = useState({
+    reviewedUserId: "",
+    role: "",
+    contributionText: "",
+    outcomeText: "",
+    riskText: "",
+    reliabilityScore: 8,
+    collaborationScore: 8,
+    deliveryScore: 8,
+    confidence: 0.8,
+    polarity: "positive",
+  });
+  const [completionDraft, setCompletionDraft] = useState({
+    summary: "",
+    visibility: "project_members",
+    memberReviews: {},
+  });
+  const memberIds = new Set(members.map((item) => Number(item.user_id)));
+  const candidateUsers = users.filter((item) => !memberIds.has(Number(item.id)));
+  const activeMembers = members.filter((item) => item.status !== "removed" && item.status !== "left" && item.status !== "rejected");
+
+  function updateCompletionReview(userId, patch) {
+    setCompletionDraft((draft) => ({
+      ...draft,
+      memberReviews: {
+        ...draft.memberReviews,
+        [userId]: {
+          ...(draft.memberReviews[userId] || {
+            reliabilityScore: 8,
+            collaborationScore: 8,
+            deliveryScore: 8,
+            confidence: 0.82,
+            polarity: "positive",
+          }),
+          ...patch,
+        },
+      },
+    }));
+  }
+
+  async function submitMember() {
+    if (!memberDraft.userId) return;
+    await onSaveMember({
+      projectId,
+      userId: memberDraft.userId,
+      member: {
+        role: memberDraft.role,
+        status: memberDraft.status,
+      },
+    });
+    setMemberDraft({ userId: "", role: "member", status: "active" });
+  }
+
+  async function submitUpdate() {
+    if (!updateDraft.title.trim() || !updateDraft.content.trim()) return;
+    await onSaveUpdate({
+      projectId,
+      update: updateDraft,
+    });
+    setUpdateDraft({ title: "", content: "", visibility: "project_members", updateType: "progress", status: "published" });
+  }
+
+  async function submitReview() {
+    if (!reviewDraft.reviewedUserId || !reviewDraft.contributionText.trim()) return;
+    await onSaveReview({
+      projectId,
+      reviewedUserId: reviewDraft.reviewedUserId,
+      review: reviewDraft,
+    });
+    setReviewDraft({
+      reviewedUserId: "",
+      role: "",
+      contributionText: "",
+      outcomeText: "",
+      riskText: "",
+      reliabilityScore: 8,
+      collaborationScore: 8,
+      deliveryScore: 8,
+      confidence: 0.8,
+      polarity: "positive",
+    });
+  }
+
+  async function submitCompletion() {
+    if (!completionDraft.summary.trim()) return;
+    const memberReviews = Object.entries(completionDraft.memberReviews)
+      .filter(([, item]) => item?.contributionText?.trim())
+      .map(([userId, item]) => ({
+        userId,
+        reviewedUserId: userId,
+        ...item,
+      }));
+    await onComplete({
+      projectId,
+      summary: completionDraft.summary,
+      visibility: completionDraft.visibility,
+      memberReviews,
+    });
+    setCompletionDraft({ summary: "", visibility: "project_members", memberReviews: {} });
+  }
+
+  return (
+    <div className="project-management-panel">
+      <div className="project-management-header">
+        <div className="title-stack">
+          <strong>{project.name}</strong>
+          <span>{communityName(communities, project.community_id)} · {statusLabel(project.status)} · {(project.tags || []).map((item) => `#${item}`).join(" ")}</span>
+        </div>
+        <button type="button" onClick={onReload}>刷新</button>
+      </div>
+
+      <section className="management-section">
+        <div className="section-title-row">
+          <h4>项目成员</h4>
+          <span className="muted">{members.length} 人</span>
+        </div>
+        <div className="compact-form-grid">
+          <Field label="添加成员">
+            <select value={memberDraft.userId} onChange={(event) => setMemberDraft({ ...memberDraft, userId: event.target.value })}>
+              <option value="">选择用户</option>
+              {candidateUsers.map((user) => (
+                <option key={user.id} value={user.id}>{user.profile?.name || user.display_name || user.openid || user.id}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="角色">
+            <select value={memberDraft.role} onChange={(event) => setMemberDraft({ ...memberDraft, role: event.target.value })}>
+              <option value="creator">主理人</option>
+              <option value="member">成员</option>
+              <option value="executor">执行</option>
+              <option value="advisor">顾问</option>
+              <option value="resource_provider">资源方</option>
+              <option value="observer">观察员</option>
+            </select>
+          </Field>
+          <Field label="状态">
+            <select value={memberDraft.status} onChange={(event) => setMemberDraft({ ...memberDraft, status: event.target.value })}>
+              <option value="active">参与中</option>
+              <option value="invited">已邀请</option>
+              <option value="left">已退出</option>
+              <option value="removed">已移除</option>
+            </select>
+          </Field>
+          <button type="button" className="primary-button inline-submit" onClick={submitMember}>保存成员</button>
+        </div>
+        <div className="member-list compact-list">
+          {members.length ? members.map((member) => (
+            <div className="member-card" key={member.id}>
+              <ProjectUserLabel user={member.user} />
+              <div className="inline-actions">
+                <Badge tone={member.status === "active" ? "green" : "default"}>{statusLabel(member.status)}</Badge>
+                <Badge tone="yellow">{statusLabel(member.role)}</Badge>
+              </div>
+            </div>
+          )) : <p className="muted">还没有项目成员。</p>}
+        </div>
+      </section>
+
+      <section className="management-section">
+        <div className="section-title-row">
+          <h4>项目进度</h4>
+          <span className="muted">公开 / 项目内可见</span>
+        </div>
+        <div className="stacked-form">
+          <div className="compact-form-grid">
+            <Field label="标题">
+              <input value={updateDraft.title} onChange={(event) => setUpdateDraft({ ...updateDraft, title: event.target.value })} placeholder="本周进展 / 里程碑 / 会议纪要" />
+            </Field>
+            <Field label="类型">
+              <select value={updateDraft.updateType} onChange={(event) => setUpdateDraft({ ...updateDraft, updateType: event.target.value })}>
+                <option value="progress">进度</option>
+                <option value="milestone">里程碑</option>
+                <option value="meeting_summary">会议纪要</option>
+                <option value="resource_update">资源更新</option>
+                <option value="announcement">公告</option>
+                <option value="other">其他</option>
+              </select>
+            </Field>
+            <Field label="可见性">
+              <select value={updateDraft.visibility} onChange={(event) => setUpdateDraft({ ...updateDraft, visibility: event.target.value })}>
+                <option value="project_members">仅项目内</option>
+                <option value="public">公开围观</option>
+              </select>
+            </Field>
+          </div>
+          <Field label="内容">
+            <textarea value={updateDraft.content} onChange={(event) => setUpdateDraft({ ...updateDraft, content: event.target.value })} placeholder="写清楚发生了什么、谁推进了什么、下一步是什么。" />
+          </Field>
+          <button type="button" className="primary-button" onClick={submitUpdate}>发布项目进度</button>
+        </div>
+        <div className="record-list">
+          {updates.length ? updates.map((update) => (
+            <article className="record-card" key={update.id}>
+              <div className="record-card-head">
+                <strong>{update.title}</strong>
+                <div className="inline-actions">
+                  <Badge tone={update.visibility === "public" ? "green" : "yellow"}>{update.visibility === "public" ? "公开" : "项目内"}</Badge>
+                  <span className="muted">{formatDate(update.created_at)}</span>
+                </div>
+              </div>
+              <p>{update.content}</p>
+              <span className="muted">发布人：{update.creator?.name || update.creator?.display_name || update.creator_user_id}</span>
+            </article>
+          )) : <p className="muted">还没有项目进度。</p>}
+        </div>
+      </section>
+
+      <section className="management-section">
+        <div className="section-title-row">
+          <h4>成员贡献备注</h4>
+          <span className="muted">写入密封证据链</span>
+        </div>
+        <div className="stacked-form">
+          <div className="compact-form-grid">
+            <Field label="被评价成员">
+              <select value={reviewDraft.reviewedUserId} onChange={(event) => setReviewDraft({ ...reviewDraft, reviewedUserId: event.target.value })}>
+                <option value="">选择成员</option>
+                {members.map((member) => (
+                  <option key={member.user_id} value={member.user_id}>{member.user?.name || member.user?.display_name || member.user_id}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="项目角色">
+              <input value={reviewDraft.role} onChange={(event) => setReviewDraft({ ...reviewDraft, role: event.target.value })} placeholder="如 AI 工程师 / 商务推进" />
+            </Field>
+            <Field label="证据倾向">
+              <select value={reviewDraft.polarity} onChange={(event) => setReviewDraft({ ...reviewDraft, polarity: event.target.value })}>
+                <option value="positive">正向</option>
+                <option value="neutral">中性</option>
+                <option value="negative">风险</option>
+              </select>
+            </Field>
+          </div>
+          <Field label="具体贡献">
+            <textarea value={reviewDraft.contributionText} onChange={(event) => setReviewDraft({ ...reviewDraft, contributionText: event.target.value })} />
+          </Field>
+          <Field label="结果表现">
+            <textarea value={reviewDraft.outcomeText} onChange={(event) => setReviewDraft({ ...reviewDraft, outcomeText: event.target.value })} />
+          </Field>
+          <Field label="风险或不适合">
+            <textarea value={reviewDraft.riskText} onChange={(event) => setReviewDraft({ ...reviewDraft, riskText: event.target.value })} />
+          </Field>
+          <div className="compact-form-grid">
+            <Field label="靠谱度">
+              <input type="number" min="0" max="10" value={reviewDraft.reliabilityScore} onChange={(event) => setReviewDraft({ ...reviewDraft, reliabilityScore: event.target.value })} />
+            </Field>
+            <Field label="协作">
+              <input type="number" min="0" max="10" value={reviewDraft.collaborationScore} onChange={(event) => setReviewDraft({ ...reviewDraft, collaborationScore: event.target.value })} />
+            </Field>
+            <Field label="交付">
+              <input type="number" min="0" max="10" value={reviewDraft.deliveryScore} onChange={(event) => setReviewDraft({ ...reviewDraft, deliveryScore: event.target.value })} />
+            </Field>
+            <Field label="可信度">
+              <input type="number" min="0" max="1" step="0.01" value={reviewDraft.confidence} onChange={(event) => setReviewDraft({ ...reviewDraft, confidence: event.target.value })} />
+            </Field>
+          </div>
+          <button type="button" className="primary-button" onClick={submitReview}>写入成员证据</button>
+        </div>
+        <div className="record-list">
+          {reviews.length ? reviews.map((review) => (
+            <article className="record-card" key={review.id}>
+              <div className="record-card-head">
+                <strong>{review.reviewed?.name || review.reviewed?.display_name || review.reviewed_user_id}</strong>
+                <span className="muted">{formatDate(review.created_at)}</span>
+              </div>
+              <p>{review.contribution_text || review.summary || "-"}</p>
+              <span className="muted">评价人：{review.reviewer?.name || review.reviewer?.display_name || review.reviewer_user_id}</span>
+            </article>
+          )) : <p className="muted">还没有成员贡献备注。</p>}
+        </div>
+      </section>
+
+      <section className="management-section danger-light">
+        <div className="section-title-row">
+          <h4>项目完结</h4>
+          <span className="muted">总结会写入项目动态；填写成员评价后自动入 RAG 证据链。</span>
+        </div>
+        <Field label="完结总结">
+          <textarea value={completionDraft.summary} onChange={(event) => setCompletionDraft({ ...completionDraft, summary: event.target.value })} placeholder="项目目标、交付结果、关键过程、后续建议。" />
+        </Field>
+        <Field label="总结可见性">
+          <select value={completionDraft.visibility} onChange={(event) => setCompletionDraft({ ...completionDraft, visibility: event.target.value })}>
+            <option value="project_members">仅项目内</option>
+            <option value="public">公开围观</option>
+          </select>
+        </Field>
+        <div className="completion-review-list">
+          {activeMembers.map((member) => {
+            const draft = completionDraft.memberReviews[member.user_id] || {};
+            return (
+              <div className="completion-review-card" key={member.user_id}>
+                <ProjectUserLabel user={member.user} />
+                <Field label="完结贡献评价">
+                  <textarea
+                    value={draft.contributionText || ""}
+                    onChange={(event) => updateCompletionReview(member.user_id, { contributionText: event.target.value })}
+                    placeholder="这个人在项目中做了什么、结果如何、适合继续承担什么。留空则不写入证据。"
+                  />
+                </Field>
+                <div className="compact-form-grid">
+                  <Field label="靠谱度">
+                    <input type="number" min="0" max="10" value={draft.reliabilityScore ?? 8} onChange={(event) => updateCompletionReview(member.user_id, { reliabilityScore: event.target.value })} />
+                  </Field>
+                  <Field label="协作">
+                    <input type="number" min="0" max="10" value={draft.collaborationScore ?? 8} onChange={(event) => updateCompletionReview(member.user_id, { collaborationScore: event.target.value })} />
+                  </Field>
+                  <Field label="交付">
+                    <input type="number" min="0" max="10" value={draft.deliveryScore ?? 8} onChange={(event) => updateCompletionReview(member.user_id, { deliveryScore: event.target.value })} />
+                  </Field>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <button type="button" className="primary-button" onClick={submitCompletion}>确认完结项目</button>
+      </section>
+    </div>
+  );
+}
+
+function ProjectTable({ projects, onEdit, onManage, communities = [], users = [] }) {
   return (
     <table>
       <thead>
@@ -1679,7 +2087,12 @@ function ProjectTable({ projects, onEdit, communities = [], users = [] }) {
             <td>{project.is_official_recommended ? <Badge tone="yellow">#{officialDisplayOrder(project.official_sort_weight)}</Badge> : "-"}</td>
             <td>{project.star_count || project.watch_count || 0}</td>
             <td>{formatDate(project.updated_at)}</td>
-            <td><button onClick={() => onEdit(project)}>编辑</button></td>
+            <td>
+              <div className="inline-actions">
+                <button onClick={() => onManage(project)}>管理</button>
+                <button onClick={() => onEdit(project)}>编辑</button>
+              </div>
+            </td>
           </tr>
         )) : (
           <tr><td colSpan="10"><EmptyState title="暂无项目">发布或同步项目后会显示在这里。</EmptyState></td></tr>

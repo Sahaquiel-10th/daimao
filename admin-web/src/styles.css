@@ -481,6 +481,83 @@ th {
   overflow-y: auto;
 }
 
+.project-management-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px 16px 18px;
+}
+
+.project-management-header,
+.section-title-row,
+.record-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.management-section {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 2px solid #23211f;
+  border-radius: 14px;
+  background: #fffdfa;
+}
+
+.management-section h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.danger-light {
+  background: #fff8e8;
+}
+
+.compact-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.compact-form-grid .field,
+.stacked-form .field,
+.completion-review-card .field {
+  margin: 0;
+}
+
+.inline-submit {
+  min-height: 42px;
+}
+
+.compact-list {
+  padding: 0;
+}
+
+.stacked-form,
+.record-list,
+.completion-review-list {
+  display: grid;
+  gap: 10px;
+}
+
+.record-card,
+.completion-review-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 2px solid #23211f;
+  border-radius: 12px;
+  background: #fff8ef;
+}
+
+.record-card p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
 .modal-title {
   position: sticky;
   top: 0;
