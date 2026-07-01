@@ -1,4 +1,5 @@
 const api = require("../../utils/businessApi");
+const assets = require("../../utils/assets");
 
 function toText(value) {
   return Array.isArray(value) ? value.join("、") : "";
@@ -29,10 +30,10 @@ Page({
     },
     memories: [],
     icons: {
-      watch: "/images/daimao2/search.png",
-      innings: "/images/daimao2/puzzle.png",
-      friends: "/images/daimao2/friends.png",
-      me: "/images/daimao2/project-task.png",
+      watch: assets.getAsset("search"),
+      innings: assets.getAsset("puzzle"),
+      friends: assets.getAsset("friends"),
+      me: assets.getAsset("projectTask"),
     },
   },
 

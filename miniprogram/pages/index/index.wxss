@@ -362,57 +362,12 @@ button::after {
   color: #fffdfa;
 }
 
-.anonymous-fold {
-  margin: 18rpx 0 24rpx;
-  border: 3rpx solid #23211f;
-  border-radius: 14rpx;
-  background: #fffdfa;
-  box-shadow: 5rpx 5rpx 0 #23211f;
-  overflow: hidden;
-}
-
-.anonymous-fold-main {
-  display: flex;
-  align-items: center;
-  gap: 18rpx;
-  padding: 22rpx;
-}
-
-.anonymous-fold-main image {
-  flex: none;
-  width: 64rpx;
-  height: 64rpx;
-}
-
-.anonymous-title {
-  font-size: 27rpx;
-  font-weight: 900;
-}
-
-.anonymous-copy {
-  margin-top: 6rpx;
-  color: #78716a;
+.anonymous-summary {
+  margin: 18rpx 8rpx 24rpx;
+  color: #9a9187;
   font-size: 22rpx;
-  line-height: 1.4;
-}
-
-.anonymous-arrow {
-  margin-left: auto;
-  font-size: 36rpx;
-  font-weight: 900;
-}
-
-.anonymous-list {
-  border-top: 2rpx solid #ebe5dc;
-}
-
-.anonymous-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18rpx;
-  padding: 18rpx 22rpx;
-  border-bottom: 2rpx solid #f0e8dd;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .new-badge {
@@ -1110,12 +1065,6 @@ button::after {
   background: #fffdfa;
   font-size: 21rpx;
   font-weight: 900;
-}
-
-.card-level-points {
-  color: #79716a;
-  font-size: 21rpx;
-  font-weight: 700;
 }
 
 .card-intro {

@@ -309,10 +309,10 @@ Page({
     cardAvatarCat: avatarCatVariants[1],
     secretaryBubble: secretaryBubble.defaultState(),
     navIcons: {
-      watch: "/images/daimao2/search.png",
-      innings: "/images/daimao2/puzzle.png",
-      friends: "/images/daimao2/friends.png",
-      me: "/images/daimao2/project-task.png",
+      watch: assetURL("search"),
+      innings: assetURL("puzzle"),
+      friends: assetURL("friends"),
+      me: assetURL("projectTask"),
     },
   },
 
@@ -339,11 +339,16 @@ Page({
 
     const profile = normalizeProfileForDisplay(wx.getStorageSync(STORAGE_KEYS.profile) || null);
     const metHistory = (wx.getStorageSync(STORAGE_KEYS.history) || []).map(normalizeProfileForDisplay);
-    const preferredTab = options.tab === "me" ? "me" : "history";
+    const preferredTab = "history";
     this.setData({ catFriendsEnabled: !!profile && profile.agreementVersion === AGREEMENT_VERSION });
 
     if (options.card === "share" && options.uid) {
       this.openSharedCard(options.uid, profile, metHistory);
+      return;
+    }
+
+    if (options.edit === "1" && profile && profile.name && profile.wechat) {
+      this.openEditorWithProfile(profile);
       return;
     }
 
@@ -390,17 +395,16 @@ Page({
     }
 
     if (profile && profile.name && profile.wechat) {
-      const grouped = this.groupCatFriends(metHistory);
       this.setData({
         mode: "home",
         activeTab: preferredTab,
         profile,
-        metHistory: grouped.registered,
-        anonymousMetHistory: grouped.anonymous,
-        newCatFriendCount: grouped.newCount,
+        metHistory: [],
+        anonymousMetHistory: [],
+        newCatFriendCount: 0,
         stickerCat: this.pickStickerCat(),
       });
-      this.updateFilteredHistory(grouped.registered, "");
+      this.updateFilteredHistory([], "");
       if (this.data.catFriendsEnabled) this.loadCatFriends();
       this.refreshCurrentProfileFromCloud(preferredTab);
       return;
@@ -555,12 +559,14 @@ Page({
   },
 
   switchTab(e) {
-    this.setData({ activeTab: e.currentTarget.dataset.tab });
-    if (e.currentTarget.dataset.tab === "history" && this.data.catFriendsEnabled) {
-      this.loadCatFriends();
+    const tab = e.currentTarget.dataset.tab || "history";
+    if (tab === "me") {
+      wx.redirectTo({ url: "/pages/me/index" });
+      return;
     }
-    if (e.currentTarget.dataset.tab === "me" && this.data.profile) {
-      this.setData({ stickerCat: this.pickStickerCat() });
+    this.setData({ activeTab: "history" });
+    if (this.data.catFriendsEnabled) {
+      this.loadCatFriends();
     }
   },
 
@@ -616,7 +622,17 @@ Page({
     const profile = normalizeProfileForDisplay(
       this.data.profile && this.data.profile.name ? this.data.profile : buildEmptyProfile()
     );
-    this.setData({ mode: "edit", profile: { ...profile }, tagText: (profile.tags || []).join("、"), editAvatarCat: this.pickAvatarCat() });
+    this.openEditorWithProfile(profile);
+  },
+
+  openEditorWithProfile(profile) {
+    const normalizedProfile = normalizeProfileForDisplay(profile || buildEmptyProfile());
+    this.setData({
+      mode: "edit",
+      profile: { ...normalizedProfile },
+      tagText: (normalizedProfile.tags || []).join("、"),
+      editAvatarCat: this.pickAvatarCat(),
+    });
   },
 
   openQuestionEditor() {
@@ -766,7 +782,12 @@ Page({
       })
       .catch((err) => {
         console.error("load cat friends failed", err);
-        this.setData({ catFriendsError: "猫友列表暂时没加载出来，请稍后再试。" });
+        this.setData({
+          catFriendsError: "猫友列表暂时没加载出来，请稍后再试。",
+          metHistory: [],
+          anonymousMetHistory: [],
+        });
+        this.updateFilteredHistory([], this.data.historySearch || "");
       })
       .finally(() => this.setData({ catFriendsLoading: false }));
   },
@@ -1158,7 +1179,7 @@ Page({
         this.setData({
           mode: "home",
           profile: displayProfile,
-          activeTab: "me",
+          activeTab: "history",
           catFriendsEnabled: displayProfile.agreementVersion === AGREEMENT_VERSION,
           stickerCat: this.pickStickerCat(),
         });
@@ -1582,21 +1603,21 @@ Page({
 
   closeCard() {
     const profile = normalizeProfileForDisplay(wx.getStorageSync(STORAGE_KEYS.profile));
-    const metHistory = (wx.getStorageSync(STORAGE_KEYS.history) || []).map(normalizeProfileForDisplay);
     if (profile && profile.name && profile.wechat) {
-      const activeTab = this.data.cardProfile && this.data.cardProfile.id === profile.id ? "me" : "history";
       this.setData({
         mode: "home",
         profile,
-        metHistory,
-        activeTab,
+        metHistory: [],
+        anonymousMetHistory: [],
+        activeTab: "history",
         stickerCat: this.pickStickerCat(),
         pendingVisitContext: null,
         reminderSubscriptionStatus: "",
       });
-      this.updateFilteredHistory(metHistory, this.data.historySearch || "");
+      this.updateFilteredHistory([], this.data.historySearch || "");
+      if (this.data.catFriendsEnabled) this.loadCatFriends();
     } else {
-      this.startOnboarding(buildEmptyProfile(), metHistory);
+      this.startOnboarding(buildEmptyProfile(), []);
     }
   },
 

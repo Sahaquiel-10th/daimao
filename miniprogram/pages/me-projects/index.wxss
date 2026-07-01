@@ -1,3 +1,18 @@
+.list-hero {
+  margin-bottom: 22rpx;
+  padding: 30rpx 28rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 22rpx;
+  background: #f5ead8;
+  box-shadow: 6rpx 6rpx 0 #23211f;
+}
+
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18rpx;
+}
+
 .mini-icon {
   width: 48rpx;
   height: 48rpx;
@@ -34,6 +49,7 @@
 
 .project-meta {
   margin-top: 18rpx;
-  color: #81776e;
-  font-size: 23rpx;
+  color: #2d685f;
+  font-size: 24rpx;
+  font-weight: 900;
 }

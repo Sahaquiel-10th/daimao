@@ -1,17 +1,24 @@
 const api = require("../../utils/businessApi");
+const assets = require("../../utils/assets");
 const secretaryBubble = require("../../utils/secretaryBubble");
 
 const ICONS = {
-  watch: "/images/daimao2/search.png",
-  innings: "/images/daimao2/puzzle.png",
-  friends: "/images/daimao2/friends.png",
-  me: "/images/daimao2/project-task.png",
+  watch: assets.getAsset("search"),
+  innings: assets.getAsset("puzzle"),
+  friends: assets.getAsset("friends"),
+  me: assets.getAsset("projectTask"),
+  notification: assets.getAsset("notification"),
+  favorite: assets.getAsset("favorite"),
+  calendar: assets.getAsset("eventCalendar"),
+  cooperation: assets.getAsset("cooperation"),
+  empty: assets.getAsset("emptyProject"),
+  project: assets.getAsset("projectTask"),
 };
 
 Page({
   data: {
     loading: true,
-    secretaryFrames: ["/images/daimao2/cat-lean-cutout.png", "/images/daimao2/cat-paw-cutout.png"],
+    secretaryFrames: [assets.getAsset("secretaryFrame1") || assets.getAsset("catLean"), assets.getAsset("secretaryFrame2") || assets.getAsset("catPaw")],
     secretaryBubble: secretaryBubble.defaultState(),
     activeFrame: 0,
     icons: ICONS,

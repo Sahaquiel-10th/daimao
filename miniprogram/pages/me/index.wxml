@@ -1,82 +1,60 @@
 <view class="dm-page me-page">
-  <view class="me-hero">
-    <image class="me-cat" src="/images/daimao2/cat-lean-cutout.png" mode="aspectFit" />
-    <view class="me-copy">
-      <view class="dm-eyebrow">MY DAIMAO</view>
-      <view class="dm-title">我的可信档案</view>
-      <view class="dm-subtitle">名片、项目、活动和秘书偏好都在这里。</view>
-    </view>
-  </view>
-
-  <view class="dm-card profile-card" bindtap="openCard">
-    <image class="profile-icon" src="/images/daimao2/project-task.png" mode="aspectFit" />
+  <view class="dm-card profile-card primary-profile">
+    <image class="profile-cat" src="{{icons.profileCat}}" mode="aspectFit" />
     <view class="profile-main">
       <view class="profile-name">{{profile.name || '还没有保存名片'}}</view>
       <view class="dm-muted">{{profile.job || '先补一张名片，碰一碰时才有东西递出去'}}</view>
+      <view class="profile-badge-row">
+        <view wx:if="{{level.name}}" class="profile-level" style="color: {{level.levelColor}}; border-color: {{level.levelColor}};">{{level.name}}</view>
+        <view class="level-help-button" bindtap="openLevelHelp">?</view>
+        <view class="role-badge small">{{identity.isCommunityMember ? '已认证' : '未认证'}}</view>
+      </view>
+      <view wx:if="{{identity.communities.length}}" class="community-list compact">
+        <view wx:for="{{identity.communities}}" wx:key="id" class="community-badge">
+          <image wx:if="{{item.logoUrl}}" src="{{item.logoUrl}}" mode="aspectFill" />
+          <text>{{item.badge || item.name}}</text>
+        </view>
+      </view>
+      <view wx:else class="community-hint">通过社区认证后，可以申请参与公开项目。</view>
     </view>
-    <view class="arrow">›</view>
+    <view class="profile-actions">
+      <button class="mini-button" bindtap="previewCard">预览</button>
+      <button class="mini-button primary" bindtap="editCard">编辑</button>
+    </view>
   </view>
 
-  <view class="dm-card level-card">
-    <view class="dm-row dm-between">
-      <view>
-        <view class="level-name" style="color: {{level.levelColor}};">{{level.name}}</view>
-        <view class="dm-muted">{{identity.isCommunityMember ? '社区成员' : '围观者'}} · {{identity.experiencePoints || 0}} 经验</view>
+  <view wx:if="{{showLevelHelp}}" class="modal-mask" bindtap="closeLevelHelp">
+    <view class="level-modal" catchtap="noop">
+      <view class="modal-title">等级说明</view>
+      <view class="qa-title">问：如何提升等级？</view>
+      <view class="qa-copy">答：通过保存名片、线下互换名片、提交项目申请、被项目接纳参与、参与项目并顺利完成等动作提升。</view>
+      <view class="rule-chip-wrap">
+        <view wx:for="{{experienceRules}}" wx:key="key" class="rule-chip">{{item.label}}</view>
       </view>
-      <view class="role-badge">{{identity.isCommunityMember ? '已认证' : '未认证'}}</view>
-    </view>
-    <view class="level-bar">
-      <view style="width: {{level.progressPercent}}%; background: {{level.levelColor}};"></view>
-    </view>
-    <view class="level-next">{{levelNextText}}</view>
-    <view wx:if="{{identity.communities.length}}" class="community-list">
-      <view wx:for="{{identity.communities}}" wx:key="id" class="community-badge">
-        <image wx:if="{{item.logoUrl}}" src="{{item.logoUrl}}" mode="aspectFill" />
-        <text>{{item.badge || item.name}}</text>
-      </view>
-    </view>
-    <view wx:else class="community-hint">通过任一社区认证后，可以申请参与公开项目。</view>
-  </view>
-
-  <view class="dm-card rule-card">
-    <view class="dm-section-title inline-title">经验怎么涨</view>
-    <view wx:for="{{experienceRules}}" wx:key="key" class="rule-line">
-      <text>{{item.label}}</text>
-      <text>+{{item.points}}</text>
+      <button class="dm-primary full-button" bindtap="closeLevelHelp">知道了</button>
     </view>
   </view>
 
   <button class="dm-primary secretary-button" bindtap="openAgentSettings">秘书怎么帮我</button>
 
-  <view class="dm-section-title">过往动态</view>
-  <view class="dm-card timeline-card">
-    <view class="timeline-item">
-      <image src="/images/daimao2/friends.png" mode="aspectFit" />
-      <view>线下碰一碰会沉淀到猫友关系里。</view>
-    </view>
-    <view class="timeline-item">
-      <image src="/images/daimao2/cooperation.png" mode="aspectFit" />
-      <view>入局项目后，协作记录会成为后续推荐依据。</view>
-    </view>
-  </view>
-
-  <view class="dm-section-title">参加 / 发起的项目</view>
-  <view wx:if="{{!projects.length}}" class="dm-card dm-empty"><view class="dm-muted">还没有项目记录。</view></view>
-  <view wx:for="{{projects}}" wx:key="id" class="dm-card compact-card" data-id="{{item.id}}" bindtap="openProject">
-    <image src="/images/daimao2/puzzle.png" mode="aspectFit" />
-    <view>
-      <view class="compact-title">{{item.name}}</view>
-      <view class="dm-muted">{{item.stage || item.status}}</view>
-    </view>
-  </view>
-
-  <view class="dm-section-title">参加的活动</view>
-  <view wx:if="{{!events.length}}" class="dm-card dm-empty"><view class="dm-muted">还没有报名的官方局。</view></view>
-  <view wx:for="{{events}}" wx:key="id" class="dm-card compact-card">
-    <image src="/images/daimao2/calendar.png" mode="aspectFit" />
-    <view>
-      <view class="compact-title">{{item.title}}</view>
-      <view class="dm-muted">{{item.location}}</view>
+  <view class="dm-card record-card">
+    <view class="dm-section-title inline-title">我的记录</view>
+    <view class="record-grid">
+      <view class="record-entry" data-target="records" bindtap="openRecordPage">
+        <image src="{{icons.friends}}" mode="aspectFit" />
+        <view>过往动态</view>
+        <text>碰一碰、记录和提醒</text>
+      </view>
+      <view class="record-entry" data-target="projects" bindtap="openRecordPage">
+        <image src="{{icons.innings}}" mode="aspectFit" />
+        <view>参加的项目</view>
+        <text>打开项目列表，再进入协作空间</text>
+      </view>
+      <view class="record-entry" data-target="events" bindtap="openRecordPage">
+        <image src="{{icons.calendar}}" mode="aspectFit" />
+        <view>参加的活动</view>
+        <text>查看报名和活动记录</text>
+      </view>
     </view>
   </view>
 

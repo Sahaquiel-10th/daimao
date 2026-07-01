@@ -1,8 +1,10 @@
+const assets = require("./assets");
+
 function defaultState() {
   return {
     visible: true,
     frame: 0,
-    frames: ["/images/daimao2/cat-lean-cutout.png", "/images/daimao2/cat-paw-cutout.png"],
+    frames: [assets.getAsset("catLean") || assets.getAsset("catLaying"), assets.getAsset("catPaw")],
   };
 }
 

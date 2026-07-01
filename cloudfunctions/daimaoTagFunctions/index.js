@@ -19,11 +19,25 @@ const AGREEMENT_VERSION = "2026-06-13-v2";
 const PROFILE_REMINDER_TEMPLATE_ID = "g_4-pPRh3dGyv9EEUNscNu81ZDGfwS-QkDdpyWv-lFU";
 const DAIMAO_APP_ID = "wx2bc83fb7b03cd3d1";
 const SQL_SYNC_ENABLED = process.env.TAG_SQL_SYNC !== "false";
+const CAT_FRIEND_SOURCES = new Set(["nfc", "share_card"]);
+const DEBUG_ACTIONS_ENABLED = process.env.ENABLE_DEBUG_ACTIONS === "true";
 let cloudbaseApp;
 let rdbClient;
 
 function now() {
   return db.serverDate();
+}
+
+function sqlNow() {
+  return new Date().toISOString().slice(0, 19).replace("T", " ");
+}
+
+function isCatFriendSource(source) {
+  return CAT_FRIEND_SOURCES.has(String(source || "").trim());
+}
+
+function debugDisabledResponse() {
+  return { success: false, code: "DEBUG_DISABLED", message: "调试接口未开启" };
 }
 
 function getRdb() {
@@ -298,7 +312,7 @@ async function syncProfileToSql(profile, sourceProfileId = "") {
   return { user, profile: savedProfile };
 }
 
-async function upsertSqlConnection(ownerOpenid, visitorOpenid, source = "other") {
+async function upsertSqlConnection(ownerOpenid, visitorOpenid, source = "other", options = {}) {
   if (!ownerOpenid || !visitorOpenid || ownerOpenid === visitorOpenid || !SQL_SYNC_ENABLED) return null;
   const [owner, visitor] = await Promise.all([ensureSqlUser(ownerOpenid), ensureSqlUser(visitorOpenid)]);
   if (!owner || !visitor) return null;
@@ -311,11 +325,13 @@ async function upsertSqlConnection(ownerOpenid, visitorOpenid, source = "other")
       request.eq("user_id", userId).eq("friend_user_id", friendUserId).limit(1)
     );
     if (existing[0]) {
+      const shouldIncrement = options.increment !== false;
       await rdbUpdate(
         "user_connections",
         {
           source: source === "share_card" ? "share_card" : source === "nfc" ? "nfc" : "other",
-          visit_count: Number(existing[0].visit_count || 0) + 1,
+          visit_count: shouldIncrement ? Number(existing[0].visit_count || 0) + 1 : Number(existing[0].visit_count || 1),
+          last_met_at: shouldIncrement ? sqlNow() : existing[0].last_met_at || sqlNow(),
           status: "active",
         },
         (request) => request.eq("id", existing[0].id)
@@ -327,10 +343,20 @@ async function upsertSqlConnection(ownerOpenid, visitorOpenid, source = "other")
         source: source === "share_card" ? "share_card" : source === "nfc" ? "nfc" : "other",
         status: "active",
         visit_count: 1,
+        last_met_at: sqlNow(),
       });
     }
   }
   return { ownerUserId: owner.id, visitorUserId: visitor.id };
+}
+
+async function syncLegacyProfileToSql(openid) {
+  if (!openid || !SQL_SYNC_ENABLED) return null;
+  const existing = await getSqlProfileByOpenid(openid).catch(() => null);
+  if (existing) return ensureSqlUser(openid);
+  const profile = await getProfile(openid).catch(() => null);
+  if (!profile) return ensureSqlUser(openid);
+  return syncProfileToSql(profile, profile._id).then((result) => result && result.user);
 }
 
 function getContextUserIds() {
@@ -755,6 +781,22 @@ async function getVisitsByUser(field, userId) {
   return visits;
 }
 
+async function getRecentVisitsByUser(field, userId, limit = 50) {
+  if (!field || !userId) return [];
+  try {
+    const resp = await db
+      .collection(COLLECTIONS.visits)
+      .where({ [field]: userId })
+      .orderBy("createdAt", "desc")
+      .limit(limit)
+      .get();
+    return resp.data || [];
+  } catch (err) {
+    console.warn("load recent visits failed", field, err.message);
+    return [];
+  }
+}
+
 async function getSubscriptionsByOwners(ownerUserIds) {
   const subscriptions = [];
   const pageSize = 100;
@@ -780,6 +822,180 @@ async function getSubscriptionsByOwners(ownerUserIds) {
     return [];
   }
   return subscriptions;
+}
+
+async function syncLegacyConnectionsForContext(contextUserIds) {
+  if (!SQL_SYNC_ENABLED || !contextUserIds.length) return { checked: 0, synced: 0, failed: 0 };
+  const visitMap = new Map();
+  for (const userId of contextUserIds) {
+    const [ownedVisits, visitedVisits] = await Promise.all([
+      getVisitsByUser("ownerUserId", userId),
+      getVisitsByUser("visitorUserId", userId),
+    ]);
+    [...ownedVisits, ...visitedVisits].forEach((visit) => {
+      const key = visit._id || `${visit.ownerUserId || ""}:${visit.visitorUserId || ""}:${visit.createdAt || ""}`;
+      visitMap.set(key, visit);
+    });
+  }
+
+  const visits = Array.from(visitMap.values()).slice(0, 120);
+  const participantIds = Array.from(
+    new Set(
+      visits
+        .flatMap((visit) => [visit.ownerUserId, visit.visitorUserId])
+        .filter(Boolean)
+    )
+  );
+  for (const participantId of participantIds) {
+    await syncLegacyProfileToSql(participantId).catch((err) => {
+      console.warn("sync legacy profile failed", participantId, err.message);
+    });
+  }
+
+  let synced = 0;
+  let failed = 0;
+  for (const visit of visits) {
+    try {
+      if (!visit.ownerUserId || !visit.visitorUserId || visit.ownerUserId === visit.visitorUserId) continue;
+      await upsertSqlConnection(visit.ownerUserId, visit.visitorUserId, visit.source || "nfc", { increment: false });
+      synced += 1;
+    } catch (err) {
+      failed += 1;
+      console.warn("sync legacy connection failed", visit._id, err.message);
+    }
+  }
+  return { checked: visitMap.size, synced, failed };
+}
+
+async function getLegacyConnectionsForDisplay(contextUserIds) {
+  const visitMap = new Map();
+  for (const userId of contextUserIds.slice(0, 3)) {
+    const [ownedVisits, visitedVisits] = await Promise.all([
+      getRecentVisitsByUser("ownerUserId", userId, 200),
+      getRecentVisitsByUser("visitorUserId", userId, 200),
+    ]);
+    [...ownedVisits, ...visitedVisits].forEach((visit) => {
+      if (!isCatFriendSource(visit.source)) return;
+      const ownerUserId = String(visit.ownerUserId || "");
+      const visitorUserId = String(visit.visitorUserId || "");
+      const friendUserId = contextUserIds.includes(ownerUserId) ? visitorUserId : ownerUserId;
+      if (!friendUserId || contextUserIds.includes(friendUserId)) return;
+      const existing = visitMap.get(friendUserId);
+      const visitTime = new Date(visit.createdAt || 0).getTime();
+      const existingTime = existing ? new Date(existing.createdAt || 0).getTime() : 0;
+      if (!existing || visitTime >= existingTime) visitMap.set(friendUserId, visit);
+    });
+  }
+
+  const entries = Array.from(visitMap.entries()).slice(0, 200);
+  const friendOpenids = entries.map(([friendUserId]) => friendUserId).filter(Boolean);
+  const sqlUsers = friendOpenids.length && SQL_SYNC_ENABLED
+    ? await rdbSelect("users", "*", (request) => request.in("openid", friendOpenids).limit(50)).catch(() => [])
+    : [];
+  const sqlProfiles = sqlUsers.length
+    ? await rdbSelect("user_profiles", "*", (request) => request.in("user_id", sqlUsers.map((item) => item.id)).limit(50)).catch(() => [])
+    : [];
+  const usersByOpenid = new Map(sqlUsers.map((user) => [String(user.openid || ""), user]));
+  const profilesByUserId = new Map(sqlProfiles.map((profile) => [Number(profile.user_id), profile]));
+
+  const result = await Promise.all(
+    entries.map(async ([friendUserId, visit]) => {
+      const sqlUser = usersByOpenid.get(friendUserId);
+      const sqlProfile = sqlUser ? publicSqlProfile(sqlUser, profilesByUserId.get(Number(sqlUser.id)), []) : null;
+      const docProfile = sqlProfile ? null : await getProfile(friendUserId).catch(() => null);
+      const profile = sqlProfile || publicProfile(docProfile);
+      if (!profile) {
+        return {
+          id: friendUserId,
+          userId: friendUserId,
+          anonymous: true,
+          metAt: visit.createdAt || "",
+          source: visit.source || "nfc",
+          relationSource: "legacy_visit",
+          visitCount: 1,
+        };
+      }
+      return {
+        ...profile,
+        anonymous: false,
+        metAt: visit.createdAt || "",
+        source: visit.source || "nfc",
+        relationSource: "legacy_visit",
+        visitCount: 1,
+      };
+    })
+  );
+  return result.sort((a, b) => new Date(b.metAt || 0).getTime() - new Date(a.metAt || 0).getTime());
+}
+
+async function getConnectionPublicProfile(user, sqlProfile) {
+  if (!user) return null;
+  const communities = await getUserCommunities(user.id);
+  const sqlProfileData = publicSqlProfile(user, sqlProfile, communities);
+  if (sqlProfileData) {
+    return {
+      ...sqlProfileData,
+      agreementStale: !!sqlProfileData.agreementVersion && sqlProfileData.agreementVersion !== AGREEMENT_VERSION,
+    };
+  }
+
+  const docProfile = user.openid ? await getProfile(user.openid).catch(() => null) : null;
+  const docProfileData = publicProfile(docProfile);
+  if (docProfileData) {
+    return {
+      ...docProfileData,
+      communities,
+      experiencePoints: Number(user.experience_points || 0),
+      profileStatus: "legacy",
+    };
+  }
+
+  return {
+    id: user.openid || String(user.id || ""),
+    userId: user.openid || String(user.id || ""),
+    name: user.display_name || "未填写名片",
+    job: "",
+    wechat: "",
+    avatar: user.avatar_url || "",
+    intro: "",
+    answers: [],
+    tags: [],
+    communities,
+    experiencePoints: Number(user.experience_points || 0),
+    profileStatus: "incomplete",
+  };
+}
+
+function getConnectionKey(connection) {
+  if (!connection) return "";
+  return String(connection.userId || connection.id || connection.wechat || connection.name || "").trim();
+}
+
+function mergeConnections(primary, fallback) {
+  const map = new Map();
+  [...(fallback || []), ...(primary || [])].forEach((item) => {
+    const key = getConnectionKey(item);
+    if (!key) return;
+    const existing = map.get(key);
+    if (existing && existing.relationSource === "legacy_visit" && item.relationSource === "sql_connection") {
+      map.set(key, {
+        ...item,
+        metAt: existing.metAt || item.metAt,
+        source: existing.source || item.source,
+        relationSource: item.relationSource,
+        anonymous: item.anonymous && existing.anonymous,
+      });
+      return;
+    }
+    const itemTime = new Date(item.metAt || item.updatedAt || item.createdAt || 0).getTime();
+    const existingTime = existing ? new Date(existing.metAt || existing.updatedAt || existing.createdAt || 0).getTime() : 0;
+    if (!existing || itemTime >= existingTime || (existing.anonymous && !item.anonymous)) {
+      map.set(key, item);
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => {
+    return new Date(b.metAt || b.updatedAt || b.createdAt || 0).getTime() - new Date(a.metAt || a.updatedAt || a.createdAt || 0).getTime();
+  });
 }
 
 async function registerProfileReminderSubscription(event) {
@@ -851,13 +1067,14 @@ async function getMyConnections() {
 
   const currentUsers = await rdbSelect("users", "*", (request) => request.in("openid", contextUserIds).limit(20));
   const currentSqlIds = currentUsers.map((user) => user.id).filter(Boolean);
-  if (!currentSqlIds.length) return { success: true, connections: [] };
+  if (!currentSqlIds.length) return { success: true, connections: await getLegacyConnectionsForDisplay(contextUserIds) };
 
   const connectionRows = await rdbSelect("user_connections", "*", (request) =>
     request.in("user_id", currentSqlIds).eq("status", "active").limit(200)
   );
-  const friendIds = Array.from(new Set(connectionRows.map((row) => row.friend_user_id).filter(Boolean)));
-  if (!friendIds.length) return { success: true, connections: [] };
+  const trustedConnectionRows = connectionRows.filter((row) => isCatFriendSource(row.source));
+  const friendIds = Array.from(new Set(trustedConnectionRows.map((row) => row.friend_user_id).filter(Boolean)));
+  if (!friendIds.length) return { success: true, connections: await getLegacyConnectionsForDisplay(contextUserIds) };
 
   const [friendUsers, friendProfiles] = await Promise.all([
     rdbSelect("users", "*", (request) => request.in("id", friendIds).limit(200)),
@@ -867,7 +1084,7 @@ async function getMyConnections() {
   const profilesByUserId = new Map(friendProfiles.map((profile) => [Number(profile.user_id), profile]));
 
   const latestConnectionByFriend = new Map();
-  connectionRows.forEach((row) => {
+  trustedConnectionRows.forEach((row) => {
     const friendId = Number(row.friend_user_id);
     const existing = latestConnectionByFriend.get(friendId);
     const rowTime = new Date(row.last_met_at || row.updated_at || row.created_at || 0).getTime();
@@ -880,13 +1097,14 @@ async function getMyConnections() {
       Array.from(latestConnectionByFriend.entries()).map(async ([friendId, connection]) => {
         const user = usersById.get(friendId);
         const profile = profilesByUserId.get(friendId);
-        const publicProfileData = publicSqlProfile(user, profile, await getUserCommunities(user && user.id));
-        if (!publicProfileData || publicProfileData.agreementVersion !== AGREEMENT_VERSION) return null;
+        const publicProfileData = await getConnectionPublicProfile(user, profile);
+        if (!publicProfileData) return null;
         return {
           ...publicProfileData,
-          anonymous: false,
+          anonymous: publicProfileData.profileStatus === "incomplete",
           metAt: connection.last_met_at || connection.updated_at || connection.created_at || "",
           source: connection.source || "other",
+          relationSource: "sql_connection",
           visitCount: Number(connection.visit_count || 1),
         };
       })
@@ -895,7 +1113,247 @@ async function getMyConnections() {
     .filter(Boolean)
     .sort((a, b) => new Date(b.metAt).getTime() - new Date(a.metAt).getTime());
 
-  return { success: true, connections: result };
+  if (!result.length) {
+    return { success: true, connections: await getLegacyConnectionsForDisplay(contextUserIds) };
+  }
+
+  const legacyConnections = await getLegacyConnectionsForDisplay(contextUserIds);
+  return { success: true, connections: mergeConnections(result, legacyConnections) };
+}
+
+async function debugMyConnections(event = {}) {
+  const currentProfile = await getCurrentProfileForDisplay();
+  const contextUserIds = Array.from(new Set([...getContextUserIds(), currentProfile && currentProfile.userId].filter(Boolean)));
+  const currentUsers = SQL_SYNC_ENABLED && contextUserIds.length
+    ? await rdbSelect("users", "*", (request) => request.in("openid", contextUserIds).limit(20)).catch((err) => ({ error: err.message }))
+    : [];
+  const currentSqlIds = Array.isArray(currentUsers) ? currentUsers.map((user) => user.id).filter(Boolean) : [];
+  const connectionRows = currentSqlIds.length
+    ? await rdbSelect("user_connections", "*", (request) =>
+        request.in("user_id", currentSqlIds).eq("status", "active").limit(200)
+      ).catch((err) => ({ error: err.message }))
+    : [];
+  const trustedConnectionRows = Array.isArray(connectionRows) ? connectionRows.filter((row) => isCatFriendSource(row.source)) : [];
+  const friendIds = Array.from(new Set(trustedConnectionRows.map((row) => row.friend_user_id).filter(Boolean)));
+  const [friendUsers, friendProfiles, legacyConnections] = await Promise.all([
+    friendIds.length
+      ? rdbSelect("users", "*", (request) => request.in("id", friendIds).limit(200)).catch((err) => ({ error: err.message }))
+      : Promise.resolve([]),
+    friendIds.length
+      ? rdbSelect("user_profiles", "*", (request) => request.in("user_id", friendIds).limit(200)).catch((err) => ({ error: err.message }))
+      : Promise.resolve([]),
+    contextUserIds.length ? getLegacyConnectionsForDisplay(contextUserIds).catch((err) => ({ error: err.message })) : Promise.resolve([]),
+  ]);
+
+  const usersById = new Map(Array.isArray(friendUsers) ? friendUsers.map((user) => [Number(user.id), user]) : []);
+  const profilesByUserId = new Map(Array.isArray(friendProfiles) ? friendProfiles.map((profile) => [Number(profile.user_id), profile]) : []);
+  const mapped = trustedConnectionRows.length
+    ? await Promise.all(
+        trustedConnectionRows.slice(0, 20).map(async (row) => {
+          const friendId = Number(row.friend_user_id);
+          const user = usersById.get(friendId);
+          const profile = profilesByUserId.get(friendId);
+          const publicProfileData = await getConnectionPublicProfile(user, profile);
+          return {
+            rowId: row.id,
+            userId: row.user_id,
+            friendUserId: row.friend_user_id,
+            source: row.source,
+            status: row.status,
+            lastMetAt: row.last_met_at || row.updated_at || row.created_at || "",
+            hasFriendUser: !!user,
+            hasSqlProfile: !!profile,
+            resolvedName: publicProfileData && publicProfileData.name,
+            resolvedProfileStatus: publicProfileData && publicProfileData.profileStatus,
+            agreementVersion: publicProfileData && publicProfileData.agreementVersion,
+          };
+        })
+      )
+    : [];
+
+  const compactConnectionRows = Array.isArray(connectionRows)
+    ? connectionRows.map((row) => ({
+        id: row.id,
+        userId: row.user_id,
+        friendUserId: row.friend_user_id,
+        source: row.source,
+        status: row.status,
+        firstMetAt: row.first_met_at || "",
+        lastMetAt: row.last_met_at || row.updated_at || row.created_at || "",
+      }))
+    : connectionRows;
+  const compactLegacyConnections = Array.isArray(legacyConnections)
+    ? legacyConnections.map((item) => ({
+        userId: item.userId || item.id,
+        name: item.name || "",
+        anonymous: !!item.anonymous,
+        source: item.source || "",
+        metAt: item.metAt || "",
+      }))
+    : legacyConnections;
+  const response = {
+    success: true,
+    contextUserIds,
+    currentProfile: currentProfile
+      ? {
+          userId: currentProfile.userId,
+          name: currentProfile.name,
+          agreementVersion: currentProfile.agreementVersion || "",
+        }
+      : null,
+    currentUsers: Array.isArray(currentUsers)
+      ? currentUsers.map((user) => ({
+          id: user.id,
+          openid: user.openid,
+          displayName: user.display_name || "",
+          status: user.status || "",
+        }))
+      : currentUsers,
+    currentSqlIds,
+    connectionRows: compactConnectionRows,
+    friendIds,
+    friendUsers: Array.isArray(friendUsers)
+      ? friendUsers.map((user) => ({
+          id: user.id,
+          openid: user.openid,
+          displayName: user.display_name || "",
+          status: user.status || "",
+        }))
+      : friendUsers,
+    friendProfiles: Array.isArray(friendProfiles)
+      ? friendProfiles.map((profile) => ({
+          userId: profile.user_id,
+          name: profile.name || "",
+          profileStatus: profile.profile_status || "",
+          agreementVersion: profile.agreement_version || "",
+        }))
+      : friendProfiles,
+    legacyConnections: compactLegacyConnections,
+    mapped,
+    summary: {
+      contextUserIdCount: contextUserIds.length,
+      currentSqlUserCount: Array.isArray(currentUsers) ? currentUsers.length : 0,
+      connectionRowCount: Array.isArray(connectionRows) ? connectionRows.length : 0,
+      trustedConnectionRowCount: trustedConnectionRows.length,
+      friendIdCount: friendIds.length,
+      legacyConnectionCount: Array.isArray(legacyConnections) ? legacyConnections.length : 0,
+      mappedCount: mapped.length,
+    },
+  };
+  if (event.verbose) {
+    response.raw = { currentUsers, connectionRows, friendUsers, friendProfiles, legacyConnections };
+  }
+  return response;
+}
+
+async function debugConnectionWithUser(event = {}) {
+  const publicUserCode = String(event.publicUserCode || event.userCode || "").trim();
+  const keyword = String(event.keyword || event.name || "").trim();
+  const currentProfile = await getCurrentProfileForDisplay();
+  const contextUserIds = Array.from(new Set([...getContextUserIds(), currentProfile && currentProfile.userId].filter(Boolean)));
+  const currentUsers = SQL_SYNC_ENABLED && contextUserIds.length
+    ? await rdbSelect("users", "*", (request) => request.in("openid", contextUserIds).limit(20)).catch((err) => ({ error: err.message }))
+    : [];
+  const currentSqlIds = Array.isArray(currentUsers) ? currentUsers.map((user) => user.id).filter(Boolean) : [];
+
+  let targetUsers = [];
+  if (SQL_SYNC_ENABLED && publicUserCode) {
+    targetUsers = await rdbSelect("users", "*", (request) => request.eq("public_user_code", publicUserCode).limit(20)).catch(() => []);
+  }
+  if (SQL_SYNC_ENABLED && !targetUsers.length && keyword) {
+    const profiles = await rdbSelect("user_profiles", "*", (request) => request.like("name", `%${keyword}%`).limit(20)).catch(() => []);
+    const targetIds = profiles.map((profile) => profile.user_id).filter(Boolean);
+    targetUsers = targetIds.length
+      ? await rdbSelect("users", "*", (request) => request.in("id", targetIds).limit(20)).catch(() => [])
+      : [];
+  }
+
+  const targetIds = targetUsers.map((user) => user.id).filter(Boolean);
+  const targetOpenids = targetUsers.map((user) => user.openid).filter(Boolean);
+  const targetProfiles = targetIds.length
+    ? await rdbSelect("user_profiles", "*", (request) => request.in("user_id", targetIds).limit(20)).catch(() => [])
+    : [];
+
+  const sqlConnections = currentSqlIds.length && targetIds.length
+    ? await rdbSelect("user_connections", "*", (request) =>
+        request.in("user_id", currentSqlIds).in("friend_user_id", targetIds).limit(50)
+      ).catch(() => [])
+    : [];
+  const reverseSqlConnections = currentSqlIds.length && targetIds.length
+    ? await rdbSelect("user_connections", "*", (request) =>
+        request.in("user_id", targetIds).in("friend_user_id", currentSqlIds).limit(50)
+      ).catch(() => [])
+    : [];
+
+  const legacyVisits = [];
+  for (const currentOpenid of contextUserIds) {
+    for (const targetOpenid of targetOpenids) {
+      const [currentAsOwner, currentAsVisitor] = await Promise.all([
+        db.collection(COLLECTIONS.visits).where({ ownerUserId: currentOpenid, visitorUserId: targetOpenid }).limit(20).get(),
+        db.collection(COLLECTIONS.visits).where({ ownerUserId: targetOpenid, visitorUserId: currentOpenid }).limit(20).get(),
+      ]);
+      legacyVisits.push(...(currentAsOwner.data || []), ...(currentAsVisitor.data || []));
+    }
+  }
+
+  return {
+    success: true,
+    query: { publicUserCode, keyword },
+    current: {
+      contextUserIds,
+      currentSqlIds,
+      profile: currentProfile
+        ? { userId: currentProfile.userId, name: currentProfile.name, agreementVersion: currentProfile.agreementVersion || "" }
+        : null,
+    },
+    targetUsers: targetUsers.map((user) => ({
+      id: user.id,
+      publicUserCode: user.public_user_code || "",
+      openid: user.openid || "",
+      displayName: user.display_name || "",
+      status: user.status || "",
+    })),
+    targetProfiles: targetProfiles.map((profile) => ({
+      userId: profile.user_id,
+      name: profile.name || "",
+      job: profile.job || "",
+      profileStatus: profile.profile_status || "",
+      agreementVersion: profile.agreement_version || "",
+    })),
+    sqlConnections: sqlConnections.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      friendUserId: row.friend_user_id,
+      source: row.source,
+      status: row.status,
+      firstMetAt: row.first_met_at || "",
+      lastMetAt: row.last_met_at || row.updated_at || row.created_at || "",
+      trusted: isCatFriendSource(row.source),
+    })),
+    reverseSqlConnections: reverseSqlConnections.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      friendUserId: row.friend_user_id,
+      source: row.source,
+      status: row.status,
+      firstMetAt: row.first_met_at || "",
+      lastMetAt: row.last_met_at || row.updated_at || row.created_at || "",
+      trusted: isCatFriendSource(row.source),
+    })),
+    legacyVisits: legacyVisits.map((visit) => ({
+      id: visit._id,
+      ownerUserId: visit.ownerUserId || "",
+      visitorUserId: visit.visitorUserId || "",
+      source: visit.source || "",
+      createdAt: visit.createdAt || "",
+      trusted: isCatFriendSource(visit.source),
+    })),
+    conclusion: {
+      hasTrustedSqlConnection: sqlConnections.some((row) => row.status === "active" && isCatFriendSource(row.source)),
+      hasTrustedReverseSqlConnection: reverseSqlConnections.some((row) => row.status === "active" && isCatFriendSource(row.source)),
+      hasTrustedLegacyVisit: legacyVisits.some((visit) => isCatFriendSource(visit.source)),
+    },
+  };
 }
 
 async function sendProfileReminder(event) {
@@ -1106,6 +1564,12 @@ exports.main = async (event) => {
       return getCurrentProfile();
     case "getMyConnections":
       return getMyConnections();
+    case "debugMyConnections":
+      if (!DEBUG_ACTIONS_ENABLED) return debugDisabledResponse();
+      return debugMyConnections(event);
+    case "debugConnectionWithUser":
+      if (!DEBUG_ACTIONS_ENABLED) return debugDisabledResponse();
+      return debugConnectionWithUser(event);
     case "sendProfileReminder":
       return sendProfileReminder(event);
     case "acceptCurrentAgreement":
@@ -1115,8 +1579,10 @@ exports.main = async (event) => {
     case "getAssetTempUrls":
       return getAssetTempUrls(event);
     case "debugCurrentProfile":
+      if (!DEBUG_ACTIONS_ENABLED) return debugDisabledResponse();
       return debugCurrentProfile();
     case "migrateProfilesToSql":
+      if (!DEBUG_ACTIONS_ENABLED) return debugDisabledResponse();
       return migrateProfilesToSql(event);
     default:
       return { success: false, code: "UNKNOWN_ACTION", message: "未知操作" };

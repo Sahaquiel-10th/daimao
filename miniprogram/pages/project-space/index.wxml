@@ -4,7 +4,7 @@
     <view class="space-hero">
       <view class="dm-eyebrow">PROJECT SPACE · MEMBERS ONLY</view>
       <view class="space-title">{{project.name}}</view>
-      <view class="space-copy">这里是项目成员协作空间。记录和 AI 草稿默认不对围观者公开。</view>
+      <view class="space-copy">这里是项目成员的异步协作空间。进度像项目贴吧一样沉淀，公开内容给围观者看，项目内内容只给成员和管理员看。</view>
     </view>
 
     <view class="space-tabs">
@@ -15,8 +15,9 @@
     </view>
 
     <block wx:if="{{activeTab === 'progress'}}">
-      <button class="dm-primary full-button" bindtap="toggleUpdateForm">{{showUpdateForm ? '收起发布框' : '发布项目进度'}}</button>
+      <button class="dm-primary full-button" bindtap="toggleUpdateForm">{{showUpdateForm ? '取消编辑' : '发布项目进度'}}</button>
       <view wx:if="{{showUpdateForm}}" class="dm-card form-card">
+        <view wx:if="{{editingUpdateId}}" class="edit-mode-tip">正在编辑已有进度，保存后会覆盖原内容。</view>
         <view class="dm-field">
           <view class="dm-label">进度标题</view>
           <input class="dm-input" data-field="title" value="{{updateForm.title}}" bindinput="onUpdateInput" placeholder="这次完成了什么" />
@@ -30,16 +31,19 @@
           <view class="{{updateForm.visibility === 'project_members' ? 'active' : ''}}" data-value="project_members" bindtap="setUpdateVisibility">仅项目成员</view>
           <view class="{{updateForm.visibility === 'public' ? 'active' : ''}}" data-value="public" bindtap="setUpdateVisibility">公开给围观者</view>
         </view>
-        <button class="dm-secondary full-button" loading="{{submitting}}" bindtap="publishUpdate">确认发布</button>
+        <view class="visibility-note">公开进度会进入围观侧；项目内进度只用于成员协作和后续项目档案。</view>
+        <button class="dm-secondary full-button" loading="{{submitting}}" bindtap="publishUpdate">{{editingUpdateId ? '保存修改' : '确认发布'}}</button>
       </view>
       <view wx:if="{{!updates.length}}" class="dm-card dm-empty"><view class="dm-muted">项目内还没有进度。</view></view>
       <view wx:for="{{updates}}" wx:key="id" class="dm-card">
         <view class="dm-row dm-between">
-          <view class="dm-pill green">项目内可见</view>
+          <view class="dm-pill {{item.visibility === 'public' ? 'yellow' : 'green'}}">{{item.visibility === 'public' ? '公开给围观者' : '项目内可见'}}</view>
           <view class="card-time">{{item.dateLabel}}</view>
         </view>
         <view class="card-title">{{item.title}}</view>
+        <view class="update-author">{{item.creator_name || '项目成员'}} 发了一条进度</view>
         <view class="card-content">{{item.content}}</view>
+        <button class="dm-ghost full-button update-edit-button" data-id="{{item.id}}" bindtap="editUpdate">编辑这条进度</button>
       </view>
     </block>
 

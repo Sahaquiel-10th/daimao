@@ -33,7 +33,7 @@
     <view class="topbar">
       <view>
         <view class="eyebrow">DAIMAO FRIENDS</view>
-        <view class="screen-title">{{activeTab === 'history' ? '我的猫友' : '我的名片'}}</view>
+        <view class="screen-title">我的猫友</view>
       </view>
     </view>
 
@@ -46,12 +46,7 @@
       <view class="platform-arrow">›</view>
     </view>
 
-    <view class="tabbar">
-      <view class="tab {{activeTab === 'history' ? 'active' : ''}}" data-tab="history" bindtap="switchTab">我的猫友</view>
-      <view class="tab {{activeTab === 'me' ? 'active' : ''}}" data-tab="me" bindtap="switchTab">关于自己</view>
-    </view>
-
-    <block wx:if="{{activeTab === 'history'}}">
+    <block>
       <view wx:if="{{!catFriendsEnabled}}" class="cat-friends-consent">
         <view class="empty-title">启用“我的猫友”</view>
         <view class="empty-text">线下碰过彼此贴纸、并已创建名片的用户，会互相出现在猫友列表中；未注册的人会先折叠起来。</view>
@@ -81,33 +76,8 @@
       <view wx:elif="{{!catFriendsError && metHistory.length === 0}}" class="empty-state">
         <image wx:if="{{emptySrc}}" src="{{emptySrc}}" mode="aspectFit" />
         <view class="empty-title">还没有猫友</view>
-        <view class="empty-text">已注册的猫友会显示在这里。碰过你但还没注册的人，先收在下面的小按钮里。</view>
+        <view class="empty-text">已注册并保存名片的猫友会显示在这里。</view>
         <view class="demo-link" bindtap="openDemoCard">查看示例名片</view>
-      </view>
-      <view wx:if="{{!catFriendsError && anonymousMetHistory.length > 0}}" class="anonymous-fold">
-        <view class="anonymous-fold-main" bindtap="toggleAnonymousFriends">
-          <image src="/images/daimao2/pending-reply.png" mode="aspectFit" />
-          <view>
-            <view class="anonymous-title">{{anonymousMetHistory.length}} 个碰过你但还没注册的人</view>
-            <view class="anonymous-copy">有人保存名片后，秘书会提醒你，并拉进猫友列表。</view>
-          </view>
-          <view class="anonymous-arrow">{{showAnonymousFriends ? '⌃' : '⌄'}}</view>
-        </view>
-        <view wx:if="{{showAnonymousFriends}}" class="anonymous-list">
-          <view wx:for="{{anonymousMetHistory}}" wx:key="id" class="anonymous-row">
-            <view>
-              <view class="history-name anonymous-name">还没留下名片</view>
-              <view class="history-time">{{item.metAt}}</view>
-            </view>
-            <button
-              class="remind-button {{item.reminderStatus}}"
-              data-connection-id="{{item.connectionId}}"
-              data-reminder-status="{{item.reminderStatus}}"
-              loading="{{remindingConnectionId === item.connectionId}}"
-              catchtap="remindAnonymousFriend"
-            >{{item.reminderStatus === 'sent' ? '已提醒' : item.reminderStatus === 'available' ? '提醒填写' : '等授权'}}</button>
-          </view>
-        </view>
       </view>
       <view wx:if="{{!catFriendsError && metHistory.length > 0 && filteredMetHistory.length === 0}}" class="empty-state compact">
         <view class="empty-title">没找到这张名片</view>
@@ -117,64 +87,21 @@
         <view wx:for="{{filteredMetHistory}}" wx:key="id" class="history-item {{item.anonymous ? 'anonymous' : ''}}" data-id="{{item.id}}" bindtap="previewMet">
           <image wx:if="{{item.avatar}}" class="history-avatar" src="{{item.avatar}}" mode="aspectFill" />
           <view class="history-main">
-            <block wx:if="{{item.anonymous}}">
-              <view class="history-name anonymous-name">还没留下名片</view>
-              <view class="history-job">碰过你的呆猫贴纸</view>
-              <view class="history-time">{{item.metAt}}</view>
-            </block>
-            <block wx:else>
-              <view class="history-name">{{item.name}}<text wx:if="{{item.newFriend || item.isNew}}" class="new-badge">NEW</text></view>
-              <view class="history-job">{{item.job}}</view>
-              <view class="history-tags">
+            <view class="history-name">{{item.name}}<text wx:if="{{item.newFriend || item.isNew}}" class="new-badge">NEW</text></view>
+            <view class="history-job">{{item.job}}</view>
+            <view class="history-tags">
               <text wx:for="{{item.tags}}" wx:for-item="tag" wx:for-index="tagIndex" wx:key="*this">{{tag}}{{tagIndex < item.tags.length - 1 ? ' · ' : ''}}</text>
               <text wx:if="{{!item.tags || !item.tags.length}}">还没有标签</text>
-              </view>
-              <view class="history-time">{{item.metAt}}</view>
-            </block>
+            </view>
+            <view class="history-time">{{item.metAt}}</view>
           </view>
-          <button
-            wx:if="{{item.anonymous}}"
-            class="remind-button {{item.reminderStatus}}"
-            data-connection-id="{{item.connectionId}}"
-            data-reminder-status="{{item.reminderStatus}}"
-            loading="{{remindingConnectionId === item.connectionId}}"
-            catchtap="remindAnonymousFriend"
-          >{{item.reminderStatus === 'sent' ? '已提醒' : item.reminderStatus === 'available' ? '提醒填写' : '等授权'}}</button>
-          <view wx:else class="arrow">›</view>
+          <view class="arrow">›</view>
         </view>
+      </view>
+      <view wx:if="{{!catFriendsError && anonymousMetHistory.length > 0}}" class="anonymous-summary">
+        还有 {{anonymousMetHistory.length}} 个碰过你但暂未保存名片的人；对方保存后会自动进入猫友列表。
       </view>
       </block>
-    </block>
-
-    <block wx:else>
-      <view class="mini-card">
-        <view class="avatar-wrap mini-avatar-wrap">
-          <image wx:if="{{profile.avatar}}" class="mini-avatar" src="{{profile.avatar}}" mode="aspectFill" />
-        </view>
-        <view class="mini-info">
-          <view class="mini-name">{{profile.name}}</view>
-          <view class="mini-job">{{profile.job}}</view>
-          <view class="mini-intro">{{profile.intro}}</view>
-        </view>
-      </view>
-      <view class="info-grid">
-        <view class="info-cell">
-          <view class="label">微信号</view>
-          <view class="value">{{profile.wechat}}</view>
-        </view>
-      </view>
-      <view class="me-actions">
-        <button hover-class="button-press" class="secondary-button" bindtap="previewMyCard">预览我的名片</button>
-        <button hover-class="button-press" class="primary-button" bindtap="openEditor">编辑我的名片</button>
-      </view>
-      <view class="legal-list">
-        <view class="legal-item" data-type="service" bindtap="openAgreement">用户服务协议<text>›</text></view>
-        <view class="legal-item" data-type="privacy" bindtap="openAgreement">隐私政策<text>›</text></view>
-      </view>
-      <view class="sticker-cta">
-        <button hover-class="button-press" class="sticker-button" bindtap="requestSticker">我也想要呆猫贴</button>
-        <image wx:if="{{stickerCat.src}}" class="sticker-cta-cat {{stickerCat.pose}}" src="{{stickerCat.src}}" mode="aspectFit" />
-      </view>
     </block>
 
     <view class="dm-bottom-nav card-bottom-nav">
@@ -281,7 +208,6 @@
         <view class="card-job">{{cardProfile.job}}</view>
         <view wx:if="{{cardProfile.levelName}}" class="card-level-row">
           <text class="card-level-badge" style="color: {{cardProfile.levelColor}}; border-color: {{cardProfile.levelColor}};">{{cardProfile.levelName}}</text>
-          <text class="card-level-points">{{cardProfile.experiencePoints || 0}} 经验</text>
         </view>
         <view class="card-intro">{{cardProfile.intro}}</view>
 

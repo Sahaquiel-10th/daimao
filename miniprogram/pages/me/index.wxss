@@ -1,32 +1,23 @@
-.me-hero {
-  display: flex;
-  align-items: center;
-  min-height: 250rpx;
-  margin-bottom: 22rpx;
-  padding: 20rpx 24rpx;
-  border: 3rpx solid #23211f;
-  border-radius: 20rpx;
-  background: #f5ead8;
-  box-shadow: 6rpx 6rpx 0 #23211f;
-}
-
-.me-cat {
-  flex: none;
-  width: 220rpx;
-  height: 210rpx;
-  margin-left: -34rpx;
-}
-
-.me-copy {
-  flex: 1;
-}
-
 .profile-card,
 .compact-card,
 .timeline-item {
   display: flex;
   align-items: center;
   gap: 18rpx;
+}
+
+.primary-profile {
+  align-items: stretch;
+  margin-bottom: 22rpx;
+  padding: 24rpx;
+  background: #fffdfa;
+}
+
+.profile-cat {
+  flex: none;
+  align-self: center;
+  width: 124rpx;
+  height: 150rpx;
 }
 
 .profile-icon,
@@ -39,6 +30,65 @@
 
 .profile-main {
   flex: 1;
+  min-width: 0;
+}
+
+.profile-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12rpx;
+}
+
+.mini-button {
+  min-width: 112rpx;
+  height: 54rpx;
+  padding: 0 18rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 999rpx;
+  background: #fffdfa;
+  box-shadow: 3rpx 3rpx 0 #23211f;
+  color: #23211f;
+  font-size: 22rpx;
+  font-weight: 900;
+  line-height: 48rpx;
+}
+
+.mini-button.primary {
+  background: #9fcfc3;
+}
+
+.profile-level {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42rpx;
+  padding: 4rpx 12rpx;
+  border: 3rpx solid #2d685f;
+  border-radius: 999rpx;
+  background: #fffdfa;
+  font-size: 22rpx;
+  font-weight: 900;
+}
+
+.profile-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10rpx;
+  margin-top: 14rpx;
+}
+
+.level-help-button {
+  width: 42rpx;
+  height: 42rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 50%;
+  background: #ffd66b;
+  box-shadow: 2rpx 2rpx 0 #23211f;
+  font-size: 24rpx;
+  font-weight: 900;
+  line-height: 38rpx;
+  text-align: center;
 }
 
 .profile-name,
@@ -76,23 +126,14 @@
   font-weight: 900;
 }
 
-.level-bar {
-  height: 18rpx;
-  margin: 22rpx 0 12rpx;
-  overflow: hidden;
-  border: 2rpx solid #23211f;
-  border-radius: 999rpx;
-  background: #efe4d2;
+.role-badge.small {
+  padding: 5rpx 12rpx;
+  box-shadow: none;
+  font-size: 21rpx;
 }
 
-.level-bar view {
-  height: 100%;
-  border-radius: 999rpx;
-  background: #9fcfc3;
-}
-
-.level-next,
 .community-hint {
+  margin-top: 14rpx;
   color: #655e57;
   font-size: 23rpx;
 }
@@ -102,6 +143,11 @@
   flex-wrap: wrap;
   gap: 10rpx;
   margin-top: 18rpx;
+}
+
+.community-list.compact {
+  margin-top: 14rpx;
+  gap: 8rpx;
 }
 
 .community-badge {
@@ -125,8 +171,87 @@
   background: #f5ead8;
 }
 
+.level-help {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-top: 20rpx;
+  padding-top: 18rpx;
+  border-top: 1rpx dashed rgba(35, 33, 31, 0.28);
+}
+
+.level-help-title {
+  width: 100%;
+  color: #655e57;
+  font-size: 23rpx;
+  font-weight: 900;
+}
+
+.rule-chip {
+  padding: 7rpx 12rpx;
+  border-radius: 999rpx;
+  background: #f5ead8;
+  color: #554d46;
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
+.rule-chip-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin: 22rpx 0;
+}
+
+.modal-mask {
+  position: fixed;
+  z-index: 80;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40rpx;
+  background: rgba(35, 33, 31, 0.45);
+}
+
+.level-modal {
+  width: 100%;
+  max-width: 620rpx;
+  padding: 34rpx 30rpx 30rpx;
+  border: 4rpx solid #23211f;
+  border-radius: 24rpx;
+  background: #fffdfa;
+  box-shadow: 7rpx 7rpx 0 #23211f;
+}
+
+.modal-title {
+  margin-bottom: 20rpx;
+  font-size: 34rpx;
+  font-weight: 900;
+  text-align: center;
+}
+
+.qa-title {
+  margin-bottom: 10rpx;
+  font-size: 27rpx;
+  font-weight: 900;
+}
+
+.qa-copy {
+  color: #514b45;
+  font-size: 25rpx;
+  line-height: 1.65;
+}
+
+.full-button {
+  width: 100%;
+}
+
 .inline-title {
-  margin: 0 0 12rpx;
+  margin: 0 0 14rpx;
 }
 
 .rule-line {
@@ -149,4 +274,43 @@
   color: #554d46;
   font-size: 25rpx;
   line-height: 1.5;
+}
+
+.record-card {
+  padding-bottom: 18rpx;
+}
+
+.record-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16rpx;
+}
+
+.record-entry {
+  display: grid;
+  grid-template-columns: 70rpx 1fr;
+  column-gap: 18rpx;
+  align-items: center;
+  min-height: 96rpx;
+  padding: 18rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 18rpx;
+  background: #fffdfa;
+  box-shadow: 4rpx 4rpx 0 #23211f;
+}
+
+.record-entry image {
+  grid-row: span 2;
+  width: 64rpx;
+  height: 64rpx;
+}
+
+.record-entry view {
+  font-size: 28rpx;
+  font-weight: 900;
+}
+
+.record-entry text {
+  color: #655e57;
+  font-size: 22rpx;
 }

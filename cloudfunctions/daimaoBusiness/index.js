@@ -46,6 +46,7 @@ const AI_MODEL = process.env.AI_MODEL || process.env.YYLX_MODEL || "";
 const AI_TEMPERATURE = Math.min(Math.max(Number(process.env.AI_TEMPERATURE || 0.1), 0), 1);
 const AI_REQUEST_TIMEOUT_MS = Math.min(Math.max(Number(process.env.AI_REQUEST_TIMEOUT_MS || 25000), 5000), 55000);
 const VECTOR_REQUEST_TIMEOUT_MS = Math.min(Math.max(Number(process.env.VECTOR_REQUEST_TIMEOUT_MS || 12000), 3000), 30000);
+const DEBUG_ACTIONS_ENABLED = process.env.ENABLE_DEBUG_ACTIONS === "true";
 const ajv = new Ajv({ allErrors: true, strict: true, allowUnionTypes: true });
 const validateAiOutput = ajv.compile(aiOutputSchema);
 let pool;
@@ -94,6 +95,12 @@ function codedError(code, message, details) {
   error.code = code;
   error.details = details;
   return error;
+}
+
+function requireDebugActionsEnabled() {
+  if (!DEBUG_ACTIONS_ENABLED) {
+    throw codedError("DEBUG_DISABLED", "调试接口未开启");
+  }
 }
 
 function assertRdb(result, action) {
@@ -5164,6 +5171,7 @@ exports.main = async (event) => {
       driver: process.env.BUSINESS_DB_DRIVER || "mysql",
     });
     if (event.action === "debugEcho") {
+      requireDebugActionsEnabled();
       return {
         success: true,
         action: event.action,
@@ -5175,6 +5183,7 @@ exports.main = async (event) => {
       };
     }
     if (event.action === "adminDebugDirectSqlSmoke") {
+      requireDebugActionsEnabled();
       const data = await adminDebugDirectSqlSmoke(event);
       return { success: true, ...data };
     }
@@ -5183,10 +5192,12 @@ exports.main = async (event) => {
       return { success: true, ...data };
     }
     if (event.action === "testAiConnection") {
+      requireDebugActionsEnabled();
       const data = await testAiConnection(event);
       return { success: true, ...data };
     }
     if (event.action === "seedDemoData") {
+      requireDebugActionsEnabled();
       const data = await seedDemoData(event);
       return { success: true, ...data };
     }
@@ -5217,6 +5228,9 @@ exports.main = async (event) => {
     }
     const handler = actions[event.action];
     if (!handler) throw codedError("UNKNOWN_ACTION", "未知业务操作");
+    if (/^admin(Debug|Test)/.test(String(event.action || ""))) {
+      requireDebugActionsEnabled();
+    }
     const user = await currentUser(event);
     const data = await handler(event, user);
     return { success: true, ...data };

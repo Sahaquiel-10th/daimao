@@ -1,0 +1,37 @@
+.records-hero {
+  margin-bottom: 22rpx;
+  padding: 30rpx 28rpx;
+  border: 3rpx solid #23211f;
+  border-radius: 22rpx;
+  background: #f5ead8;
+  box-shadow: 6rpx 6rpx 0 #23211f;
+}
+
+.empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16rpx;
+  text-align: center;
+}
+
+.empty-card image {
+  width: 110rpx;
+  height: 110rpx;
+}
+
+.empty-title,
+.record-title {
+  font-size: 30rpx;
+  font-weight: 900;
+}
+
+.records-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18rpx;
+}
+
+.record-item {
+  line-height: 1.5;
+}

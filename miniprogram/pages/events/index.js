@@ -20,10 +20,10 @@ Page({
     emptySrc: "",
     registeringId: "",
     icons: {
-      watch: "/images/daimao2/search.png",
-      innings: "/images/daimao2/puzzle.png",
-      friends: "/images/daimao2/friends.png",
-      me: "/images/daimao2/project-task.png",
+      watch: assets.getAsset("search"),
+      innings: assets.getAsset("puzzle"),
+      friends: assets.getAsset("friends"),
+      me: assets.getAsset("projectTask"),
     },
   },
 

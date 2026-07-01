@@ -1,4 +1,14 @@
 const api = require("../../utils/businessApi");
+const assets = require("../../utils/assets");
+
+function withTimeout(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      setTimeout(() => resolve({ ...fallback, timedOut: true }), ms);
+    }),
+  ]);
+}
 
 Page({
   data: {
@@ -15,15 +25,15 @@ Page({
       unread: 0,
       recommended: 0,
     },
-    secretarySrc: "/images/daimao2/cat-lean-cutout.png",
+    secretarySrc: assets.getAsset("catLean"),
     processingId: "",
     closing: false,
     returnTo: "",
     icons: {
-      watch: "/images/daimao2/search.png",
-      innings: "/images/daimao2/puzzle.png",
-      friends: "/images/daimao2/friends.png",
-      me: "/images/daimao2/project-task.png",
+      watch: assets.getAsset("search"),
+      innings: assets.getAsset("puzzle"),
+      friends: assets.getAsset("friends"),
+      me: assets.getAsset("projectTask"),
     },
   },
 
@@ -38,7 +48,15 @@ Page({
 
   loadData() {
     this.setData({ loading: true });
-    return Promise.all([api.request("listNotifications"), api.request("getRecommendations")])
+    return Promise.all([
+      withTimeout(api.request("listNotifications"), 6000, {
+        notifications: [],
+        meetingRequests: [],
+        projectApplications: [],
+        invitations: [],
+      }),
+      withTimeout(api.request("getRecommendations"), 6000, { recommendations: [] }),
+    ])
       .then(([inbox, recommendations]) => {
         this.setData({
           notifications: inbox.notifications || [],
@@ -48,6 +66,9 @@ Page({
           recommendations: recommendations.recommendations || [],
           ...this.buildBrief(inbox, recommendations),
         });
+        if (inbox.timedOut || recommendations.timedOut) {
+          wx.showToast({ title: "秘书稍后补全消息", icon: "none" });
+        }
       })
       .catch((err) => wx.showToast({ title: err.message, icon: "none" }))
       .finally(() => this.setData({ loading: false }));

@@ -55,11 +55,21 @@
   margin-top: 24rpx;
 }
 
+.edit-mode-tip {
+  margin-bottom: 22rpx;
+  padding: 16rpx;
+  border-radius: 12rpx;
+  background: #fff4cf;
+  color: #6a4a18;
+  font-size: 23rpx;
+  font-weight: 900;
+}
+
 .visibility-options {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12rpx;
-  margin: 14rpx 0 26rpx;
+  margin: 14rpx 0 14rpx;
 }
 
 .visibility-options view {
@@ -76,6 +86,13 @@
   background: #ffd66b;
 }
 
+.visibility-note {
+  margin: 0 0 26rpx;
+  color: #81776e;
+  font-size: 22rpx;
+  line-height: 1.5;
+}
+
 .card-time {
   color: #8b8178;
   font-size: 20rpx;
@@ -87,9 +104,20 @@
   font-weight: 900;
 }
 
+.update-author {
+  margin-bottom: 12rpx;
+  color: #81776e;
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
 .card-content {
   font-size: 26rpx;
   line-height: 1.65;
+}
+
+.update-edit-button {
+  margin-top: 22rpx;
 }
 
 .consent-copy {

@@ -1,0 +1,26 @@
+<view class="dm-page records-page">
+  <view class="records-hero">
+    <view>
+      <view class="dm-eyebrow">MY RECORDS</view>
+      <view class="dm-title">过往动态</view>
+      <view class="dm-subtitle">这里会集中放碰一碰、秘书提醒和后续可信档案动态。</view>
+    </view>
+  </view>
+
+  <view wx:if="{{loading}}" class="dm-card dm-empty">
+    <view class="dm-muted">正在整理动态...</view>
+  </view>
+
+  <view wx:elif="{{!memories.length}}" class="dm-card empty-card">
+    <image src="{{friendsIcon}}" mode="aspectFit" />
+    <view class="empty-title">还没有动态</view>
+    <view class="dm-muted">线下碰一碰、入局项目和活动记录会逐步沉淀到这里。</view>
+  </view>
+
+  <view wx:else class="records-list">
+    <view wx:for="{{memories}}" wx:key="id" class="dm-card record-item">
+      <view class="record-title">{{item.title || item.type || '动态'}}</view>
+      <view class="dm-muted">{{item.content || item.summary || item.created_at}}</view>
+    </view>
+  </view>
+</view>

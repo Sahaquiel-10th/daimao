@@ -1,0 +1,30 @@
+<view class="dm-page list-page">
+  <view class="list-hero">
+    <view class="dm-eyebrow">MY EVENTS</view>
+    <view class="dm-title">参加的活动</view>
+    <view class="dm-subtitle">这里集中展示你报名、参加过的活动记录。后续活动详情也会从这里进入。</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="dm-loading">正在整理活动...</view>
+
+  <view wx:elif="{{!events.length}}" class="dm-card dm-empty">
+    <image src="{{calendarIcon}}" mode="aspectFit" />
+    <view class="dm-section-title">还没有活动记录</view>
+    <view class="dm-muted">报名或签到后的活动，会出现在这里。</view>
+  </view>
+
+  <view wx:else class="event-list">
+    <view wx:for="{{events}}" wx:key="id" class="dm-card event-card">
+      <view class="dm-row dm-between">
+        <view class="dm-row">
+          <image class="mini-icon" src="{{calendarIcon}}" mode="aspectFit" />
+          <view class="dm-pill yellow">{{item.registration_status === 'checked_in' ? '已签到' : '已报名'}}</view>
+        </view>
+        <view class="dm-muted">{{item.dateLabel}}</view>
+      </view>
+      <view class="event-title">{{item.title}}</view>
+      <view class="event-copy">{{item.description}}</view>
+      <view class="event-meta">{{item.location}}</view>
+    </view>
+  </view>
+</view>

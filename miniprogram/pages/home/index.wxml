@@ -24,22 +24,22 @@
 
   <view class="stat-grid">
     <view class="stat-card">
-      <image src="/images/daimao2/notification.png" mode="aspectFit" />
+      <image src="{{icons.notification}}" mode="aspectFit" />
       <view class="stat-number">{{stats.unread}}</view>
       <view class="stat-label">新提醒</view>
     </view>
     <view class="stat-card">
-      <image src="/images/daimao2/favorite.png" mode="aspectFit" />
+      <image src="{{icons.favorite}}" mode="aspectFit" />
       <view class="stat-number">{{stats.recommended}}</view>
       <view class="stat-label">可围观</view>
     </view>
     <view class="stat-card">
-      <image src="/images/daimao2/calendar.png" mode="aspectFit" />
+      <image src="{{icons.calendar}}" mode="aspectFit" />
       <view class="stat-number">{{stats.upcoming}}</view>
       <view class="stat-label">近期局</view>
     </view>
     <view class="stat-card">
-      <image src="/images/daimao2/cooperation.png" mode="aspectFit" />
+      <image src="{{icons.cooperation}}" mode="aspectFit" />
       <view class="stat-number">{{stats.activeProjects}}</view>
       <view class="stat-label">我的开局</view>
     </view>
@@ -47,12 +47,12 @@
 
   <view class="dm-section-title">秘书建议先看</view>
   <view wx:if="{{!recommendations.length && !loading}}" class="dm-card dm-empty">
-    <image src="/images/daimao2/empty.png" mode="aspectFit" />
+    <image src="{{icons.empty}}" mode="aspectFit" />
     <view class="dm-muted">暂时没有新的项目推荐。</view>
   </view>
   <view wx:for="{{recommendations}}" wx:key="target_id" class="dm-card home-project" data-id="{{item.target_id}}" bindtap="openProject">
     <view class="dm-row">
-      <image class="card-icon" src="/images/daimao2/project-task.png" mode="aspectFit" />
+      <image class="card-icon" src="{{icons.project}}" mode="aspectFit" />
       <view class="dm-pill yellow">围观项目</view>
     </view>
     <view class="home-card-title">{{item.name}}</view>
@@ -61,7 +61,7 @@
 
   <view class="dm-section-title">最近的官方局</view>
   <view wx:for="{{events}}" wx:key="id" class="dm-card event-mini" bindtap="openEvent">
-    <image class="card-icon" src="/images/daimao2/calendar.png" mode="aspectFit" />
+    <image class="card-icon" src="{{icons.calendar}}" mode="aspectFit" />
     <view>
       <view class="home-card-title">{{item.title}}</view>
       <view class="home-card-copy">{{item.location}}</view>

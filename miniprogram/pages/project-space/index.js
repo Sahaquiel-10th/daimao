@@ -24,6 +24,7 @@ Page({
     inviteCandidates: [],
     showUpdateForm: false,
     showRecordForm: false,
+    editingUpdateId: "",
     updateForm: { title: "", content: "", visibility: "project_members", updateType: "progress" },
     recordForm: { title: "", rawText: "", recordType: "meeting_note", visibility: "project_members" },
     selectedFile: null,
@@ -78,7 +79,11 @@ Page({
   },
 
   toggleUpdateForm() {
-    this.setData({ showUpdateForm: !this.data.showUpdateForm });
+    if (this.data.showUpdateForm) {
+      this.cancelEditUpdate();
+      return;
+    }
+    this.setData({ showUpdateForm: true });
   },
 
   toggleRecordForm() {
@@ -97,6 +102,30 @@ Page({
     this.setData({ "updateForm.visibility": e.currentTarget.dataset.value });
   },
 
+  editUpdate(e) {
+    const updateId = e.currentTarget.dataset.id;
+    const update = this.data.updates.find((item) => Number(item.id) === Number(updateId));
+    if (!update) return;
+    this.setData({
+      editingUpdateId: updateId,
+      showUpdateForm: true,
+      updateForm: {
+        title: update.title || "",
+        content: update.content || "",
+        visibility: update.visibility === "public" ? "public" : "project_members",
+        updateType: update.update_type || "progress",
+      },
+    });
+  },
+
+  cancelEditUpdate() {
+    this.setData({
+      showUpdateForm: false,
+      editingUpdateId: "",
+      updateForm: { title: "", content: "", visibility: "project_members", updateType: "progress" },
+    });
+  },
+
   publishUpdate() {
     const update = this.data.updateForm;
     if (!update.title.trim() || !update.content.trim()) {
@@ -104,14 +133,15 @@ Page({
       return;
     }
     this.setData({ submitting: true });
+    const action = this.data.editingUpdateId ? "updateProjectUpdate" : "publishUpdate";
+    const payload = this.data.editingUpdateId
+      ? { projectId: this.data.projectId, updateId: this.data.editingUpdateId, update }
+      : { projectId: this.data.projectId, update };
     api
-      .request("publishUpdate", { projectId: this.data.projectId, update })
+      .request(action, payload)
       .then(() => {
-        wx.showToast({ title: update.visibility === "public" ? "公开进度已发布" : "项目内进度已发布", icon: "success" });
-        this.setData({
-          showUpdateForm: false,
-          updateForm: { title: "", content: "", visibility: "project_members", updateType: "progress" },
-        });
+        wx.showToast({ title: this.data.editingUpdateId ? "进度已更新" : update.visibility === "public" ? "公开进度已发布" : "项目内进度已发布", icon: "success" });
+        this.cancelEditUpdate();
         this.loadSpace();
       })
       .catch((err) => wx.showToast({ title: err.message, icon: "none" }))

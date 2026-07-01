@@ -1,35 +1,24 @@
 const api = require("../../utils/businessApi");
+const assets = require("../../utils/assets");
 const secretaryBubble = require("../../utils/secretaryBubble");
 
 const ICONS = {
-  watch: "/images/daimao2/search.png",
-  innings: "/images/daimao2/puzzle.png",
-  friends: "/images/daimao2/friends.png",
-  me: "/images/daimao2/project-task.png",
+  watch: assets.getAsset("search"),
+  innings: assets.getAsset("puzzle"),
+  friends: assets.getAsset("friends"),
+  me: assets.getAsset("projectTask"),
+  empty: assets.getAsset("emptyProject"),
 };
-
-function pad(value) {
-  return String(value).padStart(2, "0");
-}
-
-function formatDate(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value || "";
-  return `${date.getMonth() + 1}月${date.getDate()}日 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
 
 Page({
   data: {
-    activeTab: "mine",
     loading: true,
     projects: [],
-    events: [],
     icons: ICONS,
     secretaryBubble: secretaryBubble.defaultState(),
   },
 
-  onLoad(options) {
-    if (options.tab === "events") this.setData({ activeTab: "events" });
+  onLoad() {
     this.loadData();
     secretaryBubble.start(this);
   },
@@ -48,32 +37,17 @@ Page({
 
   loadData() {
     this.setData({ loading: true });
-    return Promise.all([api.request("listMyProjects").catch(() => ({ projects: [] })), api.request("listEvents")])
-      .then(([projectResult, eventResult]) => {
+    return api
+      .request("listMyProjects")
+      .then((projectResult) => {
         this.setData({
-          projects: (projectResult.projects || []).map((item) => ({ ...item, tags: Array.isArray(item.tags) ? item.tags : [] })),
-          events: (eventResult.events || []).map((item) => ({
-            ...item,
-            dateLabel: formatDate(item.start_time),
-            registered: ["registered", "approved"].includes(item.registration_status),
-          })),
+          projects: (projectResult.projects || [])
+            .filter((item) => item.is_creator || item.is_member || item.member_status === "active")
+            .map((item) => ({ ...item, tags: Array.isArray(item.tags) ? item.tags : [] })),
         });
       })
       .catch((err) => wx.showToast({ title: err.message, icon: "none" }))
       .finally(() => this.setData({ loading: false }));
-  },
-
-  switchTab(e) {
-    this.setData({ activeTab: e.currentTarget.dataset.tab });
-  },
-
-  createProject() {
-    wx.showModal({
-      title: "想发起项目",
-      content: "现在项目统一由营主/管理员审核发布。你可以先联系官方提项目线索，通过后再放进公开项目池。",
-      showCancel: false,
-      confirmText: "知道了",
-    });
   },
 
   openSecretary() {
@@ -82,18 +56,7 @@ Page({
 
   openProject(e) {
     const id = e.currentTarget.dataset.id;
-    const isMember = e.currentTarget.dataset.member;
-    wx.navigateTo({ url: isMember ? `/pages/project-space/index?id=${id}` : `/pages/project-detail/index?id=${id}` });
-  },
-
-  register(e) {
-    api
-      .request("registerEvent", { eventId: e.currentTarget.dataset.id })
-      .then(() => {
-        wx.showToast({ title: "报名成功", icon: "success" });
-        this.loadData();
-      })
-      .catch((err) => wx.showToast({ title: err.message, icon: "none" }));
+    wx.navigateTo({ url: `/pages/project-space/index?id=${id}` });
   },
 
   goNav(e) {

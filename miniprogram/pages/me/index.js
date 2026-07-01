@@ -1,13 +1,16 @@
 const api = require("../../utils/businessApi");
+const assets = require("../../utils/assets");
 const experience = require("../../utils/experience");
 const secretaryBubble = require("../../utils/secretaryBubble");
 
 const PROFILE_KEY = "daimao_profile";
 const ICONS = {
-  watch: "/images/daimao2/search.png",
-  innings: "/images/daimao2/puzzle.png",
-  friends: "/images/daimao2/friends.png",
-  me: "/images/daimao2/project-task.png",
+  watch: assets.getAsset("search"),
+  innings: assets.getAsset("puzzle"),
+  friends: assets.getAsset("friends"),
+  me: assets.getAsset("projectTask"),
+  profileCat: assets.getAsset("catLean"),
+  calendar: assets.getAsset("eventCalendar"),
 };
 const RULE_KEYS = [
   "register_profile",
@@ -27,6 +30,7 @@ Page({
     loading: true,
     icons: ICONS,
     profile: null,
+    showLevelHelp: false,
     identity: {
       role: "watcher",
       isAdmin: false,
@@ -35,11 +39,7 @@ Page({
       communities: [],
     },
     level: experience.getLevel(0),
-    levelNextText: "距离 Lv.02 还差 10 经验",
     experienceRules: RULE_KEYS.map((key) => RULES_BY_KEY[key]).filter(Boolean),
-    projects: [],
-    events: [],
-    memories: [],
     secretaryBubble: secretaryBubble.defaultState(),
   },
 
@@ -60,12 +60,9 @@ Page({
   loadData() {
     this.setData({ loading: true, profile: wx.getStorageSync(PROFILE_KEY) || null });
     return Promise.all([
-      api.request("listMyProjects").catch(() => ({ projects: [] })),
-      api.request("listEvents").catch(() => ({ events: [] })),
-      api.request("getAgentProfile").catch(() => ({ memories: [] })),
       api.request("getMyIdentity").catch(() => ({ identity: null })),
     ])
-      .then(([projects, events, agent, identityResult]) => {
+      .then(([identityResult]) => {
         const identity = identityResult.identity || {
           role: "watcher",
           isCommunityMember: false,
@@ -75,34 +72,50 @@ Page({
         this.setData({
           identity,
           level: experience.getLevel(identity.experiencePoints || 0),
-          levelNextText: this.buildLevelNextText(identity.experiencePoints || 0),
-          projects: (projects.projects || []).slice(0, 3),
-          events: (events.events || []).filter((item) => ["registered", "approved"].includes(item.registration_status)).slice(0, 3),
-          memories: (agent.memories || []).slice(0, 3),
         });
       })
       .finally(() => this.setData({ loading: false }));
   },
 
-  openCard() {
-    wx.navigateTo({ url: "/pages/index/index?tab=me" });
+  previewCard() {
+    wx.navigateTo({ url: "/pages/index/index?card=mine" });
+  },
+
+  editCard() {
+    wx.navigateTo({ url: "/pages/index/index?edit=1" });
   },
 
   openAgentSettings() {
-    wx.navigateTo({ url: "/pages/agent-profile/index" });
-  },
-
-  buildLevelNextText(points) {
-    const level = experience.getLevel(points);
-    return `距离 ${level.nextLevel} 还差 ${level.pointsToNext} 经验`;
+    wx.navigateTo({ url: "/pages/secretary/index" });
   },
 
   openSecretary() {
     secretaryBubble.open(this, "/pages/me/index");
   },
 
+  openLevelHelp() {
+    this.setData({ showLevelHelp: true });
+  },
+
+  closeLevelHelp() {
+    this.setData({ showLevelHelp: false });
+  },
+
+  noop() {},
+
   openProject(e) {
     wx.navigateTo({ url: `/pages/project-space/index?id=${e.currentTarget.dataset.id}` });
+  },
+
+  openRecordPage(e) {
+    const target = e.currentTarget.dataset.target;
+    const routes = {
+      records: "/pages/me-records/index",
+      projects: "/pages/me-projects/index",
+      events: "/pages/me-events/index",
+    };
+    const url = routes[target];
+    if (url) wx.navigateTo({ url });
   },
 
   goNav(e) {

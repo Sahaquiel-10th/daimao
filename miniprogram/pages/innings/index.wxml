@@ -3,28 +3,22 @@
     <view>
       <view class="dm-eyebrow">START / JOIN</view>
       <view class="dm-title">开局</view>
-      <view class="dm-subtitle">这里放你自己发起的项目、已经入局的项目，以及官方可以线下认识人的局。</view>
+      <view class="dm-subtitle">这里是你已入局的项目。项目进度、成员记录和对外围观更新，都在项目空间里完成。</view>
     </view>
-    <button class="create-button" bindtap="createProject">提项目</button>
   </view>
 
-  <view class="innings-tabs">
-    <view class="{{activeTab === 'mine' ? 'active' : ''}}" data-tab="mine" bindtap="switchTab">我的开局</view>
-    <view class="{{activeTab === 'events' ? 'active' : ''}}" data-tab="events" bindtap="switchTab">官方开局</view>
-  </view>
-
-  <view wx:if="{{loading}}" class="dm-loading">正在找你的局...</view>
-  <block wx:elif="{{activeTab === 'mine'}}">
+  <view wx:if="{{loading}}" class="dm-loading">正在找你的项目...</view>
+  <block wx:else>
     <view wx:if="{{!projects.length}}" class="dm-card dm-empty">
-      <image src="/images/daimao2/empty.png" mode="aspectFit" />
-      <view class="dm-section-title">你还没有开局</view>
-      <view class="dm-muted">通过社区认证后，可以申请参与公开项目；想发起项目请先联系官方审核。</view>
+      <image src="{{icons.empty}}" mode="aspectFit" />
+      <view class="dm-section-title">你还没有入局项目</view>
+      <view class="dm-muted">项目由官方或营主发布。通过社区认证后，可以去围观页申请参与公开项目。</view>
     </view>
-    <view wx:for="{{projects}}" wx:key="id" class="dm-card project-card" data-id="{{item.id}}" data-member="{{item.is_member || item.is_creator}}" bindtap="openProject">
+    <view wx:for="{{projects}}" wx:key="id" class="dm-card project-card" data-id="{{item.id}}" bindtap="openProject">
       <view class="dm-row dm-between">
         <view class="dm-row">
-          <image class="mini-icon" src="/images/daimao2/puzzle.png" mode="aspectFit" />
-          <view class="dm-pill green">{{item.is_creator ? '我发起' : '已入局'}}</view>
+          <image class="mini-icon" src="{{icons.innings}}" mode="aspectFit" />
+          <view class="dm-pill green">{{item.is_creator ? '我主理' : '已入局'}}</view>
         </view>
         <view class="dm-muted">{{item.status}}</view>
       </view>
@@ -33,24 +27,7 @@
         <text wx:for="{{item.tags}}" wx:key="*this">#{{item}}</text>
       </view>
       <view class="project-copy">{{item.description}}</view>
-      <view class="project-meta">★ {{item.star_count || 0}} · {{item.watch_count || 0}} 人围观</view>
-    </view>
-  </block>
-
-  <block wx:else>
-    <view wx:for="{{events}}" wx:key="id" class="dm-card event-card">
-      <view class="dm-row dm-between">
-        <view class="dm-row">
-          <image class="mini-icon" src="/images/daimao2/calendar.png" mode="aspectFit" />
-          <view class="dm-pill yellow">官方局</view>
-        </view>
-        <view class="dm-muted">{{item.dateLabel}}</view>
-      </view>
-      <view class="project-title">{{item.title}}</view>
-      <view class="project-copy">{{item.description}}</view>
-      <view class="project-meta">{{item.location}}</view>
-      <button wx:if="{{item.registered}}" class="dm-secondary event-button">已报名</button>
-      <button wx:else class="dm-primary event-button" data-id="{{item.id}}" bindtap="register">报名参加</button>
+      <view class="project-meta">项目空间 · 进度同步 · 成员讨论 →</view>
     </view>
   </block>
 
