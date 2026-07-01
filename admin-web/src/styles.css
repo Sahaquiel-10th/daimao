@@ -481,6 +481,10 @@ th {
   overflow-y: auto;
 }
 
+.modal-panel-wide {
+  width: min(1040px, 100%);
+}
+
 .project-management-panel {
   display: grid;
   gap: 14px;
@@ -494,6 +498,37 @@ th {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.project-management-header {
+  position: sticky;
+  top: 52px;
+  z-index: 1;
+  padding: 10px 0;
+  background: #fffdfa;
+}
+
+.project-management-tabs {
+  position: sticky;
+  top: 112px;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px 0;
+  background: #fffdfa;
+}
+
+.project-management-tabs button {
+  border-radius: 999px;
+  background: #fff8e8;
+  font-size: 14px;
+}
+
+.project-management-tabs button.active {
+  background: #ffd66b;
+  box-shadow: 0 3px 0 #23211f;
+  transform: translateY(-2px);
 }
 
 .management-section {
@@ -530,6 +565,13 @@ th {
 
 .inline-submit {
   min-height: 42px;
+}
+
+.primary-button:disabled,
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
 }
 
 .compact-list {

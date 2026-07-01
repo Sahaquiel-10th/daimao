@@ -973,7 +973,7 @@ export default function App() {
               </Modal>
             )}
             {projectManage && (
-              <Modal title={`项目管理：${projectManage.project?.name || projectManage.project?.id || ""}`} onClose={() => setProjectManage(null)}>
+              <Modal title={`项目管理：${projectManage.project?.name || projectManage.project?.id || ""}`} onClose={() => setProjectManage(null)} wide>
                 <ProjectManagementPanel
                   data={projectManage}
                   users={data?.users || []}
@@ -1157,10 +1157,10 @@ function UserTable({ users, onEdit }) {
   );
 }
 
-function Modal({ title, children, onClose }) {
+function Modal({ title, children, onClose, wide = false }) {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="modal-panel dm-card" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
+      <section className={`modal-panel dm-card${wide ? " modal-panel-wide" : ""}`} role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-title">
           <h3>{title}</h3>
           <button type="button" className="icon-button" onClick={onClose} title="关闭">×</button>
@@ -1719,12 +1719,37 @@ function ProjectUserLabel({ user }) {
   );
 }
 
+function ActionButton({ status, idleText, pendingText = "保存中...", successText = "已保存", onClick, disabled = false, className = "primary-button" }) {
+  const label = status === "saving" ? pendingText : status === "success" ? successText : status === "error" ? "保存失败，重试" : idleText;
+  return (
+    <button type="button" className={className} onClick={onClick} disabled={disabled || status === "saving"}>
+      {label}
+    </button>
+  );
+}
+
+function searchableUserText(user = {}) {
+  return [
+    user.id,
+    user.public_user_code,
+    user.openid,
+    user.unionid,
+    user.display_name,
+    user.profile?.name,
+    user.profile?.job,
+    user.profile?.wechat,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
 function ProjectManagementPanel({ data, users = [], communities = [], onReload, onSaveMember, onSaveUpdate, onSaveReview, onComplete }) {
   const project = data?.project || {};
   const projectId = project.id;
   const members = data?.members || [];
   const updates = data?.updates || [];
   const reviews = data?.reviews || [];
+  const [activeTab, setActiveTab] = useState("members");
+  const [memberKeyword, setMemberKeyword] = useState("");
+  const [actionStatus, setActionStatus] = useState({});
   const [memberDraft, setMemberDraft] = useState({ userId: "", role: "member", status: "active" });
   const [updateDraft, setUpdateDraft] = useState({
     title: "",
@@ -1751,8 +1776,22 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
     memberReviews: {},
   });
   const memberIds = new Set(members.map((item) => Number(item.user_id)));
-  const candidateUsers = users.filter((item) => !memberIds.has(Number(item.id)));
+  const normalizedKeyword = memberKeyword.trim().toLowerCase();
+  const candidateUsers = users
+    .filter((item) => !memberIds.has(Number(item.id)))
+    .filter((item) => !normalizedKeyword || searchableUserText(item).includes(normalizedKeyword))
+    .slice(0, normalizedKeyword ? 30 : 8);
   const activeMembers = members.filter((item) => item.status !== "removed" && item.status !== "left" && item.status !== "rejected");
+
+  async function withActionStatus(key, runner) {
+    setActionStatus((next) => ({ ...next, [key]: "saving" }));
+    const ok = await runner();
+    setActionStatus((next) => ({ ...next, [key]: ok ? "success" : "error" }));
+    if (ok) {
+      setTimeout(() => setActionStatus((next) => ({ ...next, [key]: "" })), 1400);
+    }
+    return ok;
+  }
 
   function updateCompletionReview(userId, patch) {
     setCompletionDraft((draft) => ({
@@ -1775,34 +1814,37 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
 
   async function submitMember() {
     if (!memberDraft.userId) return;
-    await onSaveMember({
+    const ok = await withActionStatus("member", () => onSaveMember({
       projectId,
       userId: memberDraft.userId,
       member: {
         role: memberDraft.role,
         status: memberDraft.status,
       },
-    });
-    setMemberDraft({ userId: "", role: "member", status: "active" });
+    }));
+    if (ok) {
+      setMemberDraft({ userId: "", role: "member", status: "active" });
+      setMemberKeyword("");
+    }
   }
 
   async function submitUpdate() {
     if (!updateDraft.title.trim() || !updateDraft.content.trim()) return;
-    await onSaveUpdate({
+    const ok = await withActionStatus("update", () => onSaveUpdate({
       projectId,
       update: updateDraft,
-    });
-    setUpdateDraft({ title: "", content: "", visibility: "project_members", updateType: "progress", status: "published" });
+    }));
+    if (ok) setUpdateDraft({ title: "", content: "", visibility: "project_members", updateType: "progress", status: "published" });
   }
 
   async function submitReview() {
     if (!reviewDraft.reviewedUserId || !reviewDraft.contributionText.trim()) return;
-    await onSaveReview({
+    const ok = await withActionStatus("review", () => onSaveReview({
       projectId,
       reviewedUserId: reviewDraft.reviewedUserId,
       review: reviewDraft,
-    });
-    setReviewDraft({
+    }));
+    if (ok) setReviewDraft({
       reviewedUserId: "",
       role: "",
       contributionText: "",
@@ -1825,13 +1867,13 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
         reviewedUserId: userId,
         ...item,
       }));
-    await onComplete({
+    const ok = await withActionStatus("complete", () => onComplete({
       projectId,
       summary: completionDraft.summary,
       visibility: completionDraft.visibility,
       memberReviews,
-    });
-    setCompletionDraft({ summary: "", visibility: "project_members", memberReviews: {} });
+    }));
+    if (ok) setCompletionDraft({ summary: "", visibility: "project_members", memberReviews: {} });
   }
 
   return (
@@ -1844,17 +1886,31 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
         <button type="button" onClick={onReload}>刷新</button>
       </div>
 
-      <section className="management-section">
+      <div className="project-management-tabs">
+        {[
+          ["members", "成员"],
+          ["updates", "进度"],
+          ["reviews", "贡献备注"],
+          ["complete", "项目完结"],
+        ].map(([key, label]) => (
+          <button key={key} type="button" className={activeTab === key ? "active" : ""} onClick={() => setActiveTab(key)}>{label}</button>
+        ))}
+      </div>
+
+      {activeTab === "members" && <section className="management-section">
         <div className="section-title-row">
           <h4>项目成员</h4>
           <span className="muted">{members.length} 人</span>
         </div>
         <div className="compact-form-grid">
+          <Field label="搜索用户">
+            <input value={memberKeyword} onChange={(event) => setMemberKeyword(event.target.value)} placeholder="输入用户ID、姓名、微信号或 openid" />
+          </Field>
           <Field label="添加成员">
             <select value={memberDraft.userId} onChange={(event) => setMemberDraft({ ...memberDraft, userId: event.target.value })}>
-              <option value="">选择用户</option>
+              <option value="">{normalizedKeyword ? "选择搜索结果" : "输入关键词可更精准"}</option>
               {candidateUsers.map((user) => (
-                <option key={user.id} value={user.id}>{user.profile?.name || user.display_name || user.openid || user.id}</option>
+                <option key={user.id} value={user.id}>{user.profile?.name || user.display_name || user.openid || user.id} · ID {user.public_user_code || user.id}</option>
               ))}
             </select>
           </Field>
@@ -1876,7 +1932,7 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
               <option value="removed">已移除</option>
             </select>
           </Field>
-          <button type="button" className="primary-button inline-submit" onClick={submitMember}>保存成员</button>
+          <ActionButton status={actionStatus.member} idleText="保存成员" pendingText="正在保存成员..." onClick={submitMember} disabled={!memberDraft.userId} className="primary-button inline-submit" />
         </div>
         <div className="member-list compact-list">
           {members.length ? members.map((member) => (
@@ -1889,9 +1945,9 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
             </div>
           )) : <p className="muted">还没有项目成员。</p>}
         </div>
-      </section>
+      </section>}
 
-      <section className="management-section">
+      {activeTab === "updates" && <section className="management-section">
         <div className="section-title-row">
           <h4>项目进度</h4>
           <span className="muted">公开 / 项目内可见</span>
@@ -1921,7 +1977,7 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
           <Field label="内容">
             <textarea value={updateDraft.content} onChange={(event) => setUpdateDraft({ ...updateDraft, content: event.target.value })} placeholder="写清楚发生了什么、谁推进了什么、下一步是什么。" />
           </Field>
-          <button type="button" className="primary-button" onClick={submitUpdate}>发布项目进度</button>
+          <ActionButton status={actionStatus.update} idleText="发布项目进度" pendingText="正在发布..." onClick={submitUpdate} disabled={!updateDraft.title.trim() || !updateDraft.content.trim()} />
         </div>
         <div className="record-list">
           {updates.length ? updates.map((update) => (
@@ -1938,9 +1994,9 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
             </article>
           )) : <p className="muted">还没有项目进度。</p>}
         </div>
-      </section>
+      </section>}
 
-      <section className="management-section">
+      {activeTab === "reviews" && <section className="management-section">
         <div className="section-title-row">
           <h4>成员贡献备注</h4>
           <span className="muted">写入密封证据链</span>
@@ -1989,7 +2045,7 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
               <input type="number" min="0" max="1" step="0.01" value={reviewDraft.confidence} onChange={(event) => setReviewDraft({ ...reviewDraft, confidence: event.target.value })} />
             </Field>
           </div>
-          <button type="button" className="primary-button" onClick={submitReview}>写入成员证据</button>
+          <ActionButton status={actionStatus.review} idleText="写入成员证据" pendingText="正在写入证据..." onClick={submitReview} disabled={!reviewDraft.reviewedUserId || !reviewDraft.contributionText.trim()} />
         </div>
         <div className="record-list">
           {reviews.length ? reviews.map((review) => (
@@ -2003,9 +2059,9 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
             </article>
           )) : <p className="muted">还没有成员贡献备注。</p>}
         </div>
-      </section>
+      </section>}
 
-      <section className="management-section danger-light">
+      {activeTab === "complete" && <section className="management-section danger-light">
         <div className="section-title-row">
           <h4>项目完结</h4>
           <span className="muted">总结会写入项目动态；填写成员评价后自动入 RAG 证据链。</span>
@@ -2047,8 +2103,8 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
             );
           })}
         </div>
-        <button type="button" className="primary-button" onClick={submitCompletion}>确认完结项目</button>
-      </section>
+        <ActionButton status={actionStatus.complete} idleText="确认完结项目" pendingText="正在完结并写入证据..." onClick={submitCompletion} disabled={!completionDraft.summary.trim()} />
+      </section>}
     </div>
   );
 }
