@@ -626,7 +626,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand-line sidebar-brand">
           <img src={logoCutout} alt="" />
-          <h1>呆猫后台</h1>
+          <h1>呆猫管理后台</h1>
         </div>
         <nav>
           {visibleTabs.map((tab) => {
