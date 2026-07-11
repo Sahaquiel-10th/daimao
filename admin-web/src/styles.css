@@ -1070,6 +1070,7 @@ button:disabled {
 .billing-form small { color: #6f6a63; font-weight: 700; }
 .billing-token { grid-column: 1 / -1; display: grid; gap: 12px; }
 .billing-token textarea { min-height: 120px; font-family: "SFMono-Regular", Consolas, monospace; word-break: break-all; }
+.immutable-hint { grid-column: 1 / -1; margin: 0; padding: 10px 12px; border: 2px solid #23211f; border-radius: 10px; background: #d7e8ff; color: #3e5269; font-size: 12px; font-weight: 800; }
 
 @media (max-width: 900px) {
   .billing-detail-grid { grid-template-columns: 1fr; }
