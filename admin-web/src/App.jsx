@@ -15,8 +15,10 @@ import {
   Trash2,
   UserRound,
   Users,
+  Zap,
 } from "lucide-react";
 import { callAdmin, hasToken, loginAdmin, saveAccessKey, saveToken, uploadAsset } from "./api";
+import BillingPage from "./Billing";
 import logoCutout from "./assets/logo-cutout.png";
 import catRub from "./assets/cat-rub-cutout.png";
 import catStretch from "./assets/cat-stretch-cutout.png";
@@ -30,6 +32,7 @@ const tabs = [
   { key: "events", label: "活动", icon: CalendarDays },
   { key: "pending", label: "待处理", icon: CheckCircle2 },
   { key: "experience", label: "经验", icon: Star, superOnly: true },
+  { key: "billing", label: "AI 计费", icon: Zap, superOnly: true },
   { key: "rag", label: "RAG", icon: Search },
   { key: "logs", label: "日志", icon: FileText, superOnly: true },
 ];
@@ -47,6 +50,8 @@ const emptyEvent = {
   capacity: "",
   coverUrl: "",
   communityId: "",
+  feeAmount: "",
+  feeCurrency: "CNY",
 };
 
 function emptyProjectDraft(defaultCommunityId = "") {
@@ -302,6 +307,7 @@ export default function App() {
   const [projectDraft, setProjectDraft] = useState(null);
   const [projectManage, setProjectManage] = useState(null);
   const [eventDraft, setEventDraft] = useState(null);
+  const [eventRegistrationDraft, setEventRegistrationDraft] = useState(null);
   const [toast, setToast] = useState(null);
   const [errorNeedsLogin, setErrorNeedsLogin] = useState(false);
 
@@ -626,7 +632,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand-line sidebar-brand">
           <img src={logoCutout} alt="" />
-          <h1>呆猫管理后台</h1>
+          <h1>呆猫后台</h1>
         </div>
         <nav>
           {visibleTabs.map((tab) => {
@@ -996,7 +1002,19 @@ export default function App() {
                 <h3>活动管理</h3>
                 <button type="button" onClick={() => setEventDraft(emptyEvent)}>新建活动</button>
               </div>
-              <EventTable events={filteredEvents} onEdit={(item) => setEventDraft(fromEventRow(item))} communities={data?.communities || []} />
+              <EventTable
+                events={filteredEvents}
+                onEdit={(item) => setEventDraft(fromEventRow(item))}
+                onConfirmRegistration={(item) => setEventRegistrationDraft({
+                  eventId: item.id,
+                  title: item.title,
+                  userRef: "",
+                  externalPaymentNo: "",
+                  paidAmount: item.fee_amount_cents ? (Number(item.fee_amount_cents || 0) / 100).toFixed(2) : "",
+                  note: "",
+                })}
+                communities={data?.communities || []}
+              />
             </section>
             {eventDraft && (
               <Modal title={eventDraft.id ? "编辑活动" : "发布活动"} onClose={() => setEventDraft(null)}>
@@ -1016,6 +1034,20 @@ export default function App() {
                       : run("adminCreateEvent", { event: payload }, "活动已发布");
                     request.then((ok) => {
                       if (ok) setEventDraft(null);
+                    });
+                  }}
+                />
+              </Modal>
+            )}
+            {eventRegistrationDraft && (
+              <Modal title="确认活动报名" onClose={() => setEventRegistrationDraft(null)}>
+                <EventRegistrationConfirm
+                  draft={eventRegistrationDraft}
+                  onChange={setEventRegistrationDraft}
+                  onSubmit={() => {
+                    const payload = toRegistrationConfirmPayload(eventRegistrationDraft);
+                    run("adminConfirmEventRegistration", payload, "报名已确认").then((ok) => {
+                      if (ok) setEventRegistrationDraft(null);
                     });
                   }}
                 />
@@ -1057,6 +1089,10 @@ export default function App() {
               />
             </section>
           </section>
+        )}
+
+        {activeTab === "billing" && (
+          <BillingPage onError={showError} onToast={setToast} />
         )}
 
         {activeTab === "rag" && (
@@ -2277,7 +2313,7 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], 
   );
 }
 
-function EventTable({ events, onEdit, communities = [] }) {
+function EventTable({ events, onEdit, onConfirmRegistration, communities = [] }) {
   return (
     <table>
       <thead>
@@ -2287,6 +2323,7 @@ function EventTable({ events, onEdit, communities = [] }) {
           <th>社区</th>
           <th>时间</th>
           <th>地点</th>
+          <th>报名费</th>
           <th>状态</th>
           <th>容量</th>
           <th>操作</th>
@@ -2305,12 +2342,18 @@ function EventTable({ events, onEdit, communities = [] }) {
             <td>{communityName(communities, event.community_id)}</td>
             <td>{formatDate(event.start_time)}</td>
             <td>{event.location || "-"}</td>
+            <td>{formatEventFee(event)}</td>
             <td><Badge tone={event.status === "published" ? "green" : "default"}>{statusLabel(event.status)}</Badge></td>
             <td>{event.capacity || "-"}</td>
-            <td><button onClick={() => onEdit(event)}>编辑</button></td>
+            <td>
+              <div className="inline-actions">
+                <button type="button" onClick={() => onEdit(event)}>编辑</button>
+                <button type="button" onClick={() => onConfirmRegistration(event)}>确认报名</button>
+              </div>
+            </td>
           </tr>
         )) : (
-          <tr><td colSpan="8"><EmptyState title="暂无活动">创建活动后会显示在这里。</EmptyState></td></tr>
+          <tr><td colSpan="9"><EmptyState title="暂无活动">创建活动后会显示在这里。</EmptyState></td></tr>
         )}
       </tbody>
     </table>
@@ -2332,6 +2375,27 @@ function EventEditor({ draft, onChange, onSubmit, onUpload, communities = [], is
           ))}
         </select>
       </Field>
+      <div className="payment-section">
+        <div className="payment-section-title">报名与外部支付</div>
+        <p className="form-hint">
+          0 元表示免费活动，可在呆猫内直接报名；大于 0 元表示由所属社区小程序收款，呆猫不会直接报名成功，只等待外部社区回传支付成功记录。
+        </p>
+        <Field label="报名费（元）">
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="0 表示免费，例如 99"
+            value={draft.feeAmount || ""}
+            onChange={(event) => onChange({ ...draft, feeAmount: event.target.value })}
+          />
+        </Field>
+        <Field label="币种">
+          <select value={draft.feeCurrency || "CNY"} onChange={(event) => onChange({ ...draft, feeCurrency: event.target.value })}>
+            <option value="CNY">CNY 人民币</option>
+          </select>
+        </Field>
+      </div>
       <Field label="活动封面">
         <AssetUploadField
           value={draft.coverUrl || ""}
@@ -2376,6 +2440,50 @@ function EventEditor({ draft, onChange, onSubmit, onUpload, communities = [], is
         <textarea value={draft.description || ""} onChange={(event) => onChange({ ...draft, description: event.target.value })} />
       </Field>
       <button className="primary-button" onClick={onSubmit}>{draft.id ? "保存活动" : "发布活动"}</button>
+    </aside>
+  );
+}
+
+function EventRegistrationConfirm({ draft, onChange, onSubmit }) {
+  return (
+    <aside className="editor-panel embedded-editor">
+      <p className="form-hint">
+        这里只记录其他社区小程序已完成支付后的报名结果。呆猫不收款、不创建支付订单。
+      </p>
+      <Field label="活动">
+        <input value={`${draft.title || ""} #${draft.eventId || ""}`} disabled />
+      </Field>
+      <Field label="用户 ID / 公开编号">
+        <input
+          placeholder="例如 4 或 013"
+          value={draft.userRef || ""}
+          onChange={(event) => onChange({ ...draft, userRef: event.target.value })}
+        />
+      </Field>
+      <Field label="外部支付单号">
+        <input
+          placeholder="其他社区支付系统返回的订单号，可选"
+          value={draft.externalPaymentNo || ""}
+          onChange={(event) => onChange({ ...draft, externalPaymentNo: event.target.value })}
+        />
+      </Field>
+      <Field label="实收金额（元）">
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          value={draft.paidAmount || ""}
+          onChange={(event) => onChange({ ...draft, paidAmount: event.target.value })}
+        />
+      </Field>
+      <Field label="备注">
+        <textarea
+          placeholder="例如：轻创小程序已支付；线下收款确认；免费活动手动确认"
+          value={draft.note || ""}
+          onChange={(event) => onChange({ ...draft, note: event.target.value })}
+        />
+      </Field>
+      <button className="primary-button" disabled={!draft.userRef} onClick={onSubmit}>确认报名成功</button>
     </aside>
   );
 }
@@ -2567,6 +2675,8 @@ function fromEventRow(row) {
     coverUrl: row.cover_url || "",
     coverDisplayUrl: row.cover_display_url || "",
     communityId: row.community_id || "",
+    feeAmount: row.fee_amount_cents ? (Number(row.fee_amount_cents || 0) / 100).toFixed(2) : "",
+    feeCurrency: row.fee_currency || "CNY",
   };
 }
 
@@ -2584,7 +2694,32 @@ function toEventPayload(draft) {
     capacity: draft.capacity ? Number(draft.capacity) : null,
     coverUrl: draft.coverUrl || "",
     communityId: draft.communityId || draft.community_id || null,
+    feeAmount: draft.feeAmount || 0,
+    feeCurrency: draft.feeCurrency || "CNY",
   };
+}
+
+function toRegistrationConfirmPayload(draft) {
+  const userRef = String(draft.userRef || "").trim();
+  const paidAmount = Number(draft.paidAmount || 0);
+  const payload = {
+    eventId: draft.eventId,
+    externalPaymentNo: draft.externalPaymentNo || "",
+    paidAmountCents: Number.isFinite(paidAmount) ? Math.round(paidAmount * 100) : 0,
+    note: draft.note || "",
+  };
+  if (/^[1-9]\d*$/.test(userRef)) {
+    payload.userId = Number(userRef);
+  } else {
+    payload.publicUserCode = userRef;
+  }
+  return payload;
+}
+
+function formatEventFee(event) {
+  const cents = Number(event.fee_amount_cents || 0);
+  if (!cents) return "免费";
+  return `${event.fee_currency || "CNY"} ${(cents / 100).toFixed(2)}`;
 }
 
 function toProjectPatch(draft) {

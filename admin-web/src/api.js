@@ -251,7 +251,7 @@ const mockState = {
     { id: 101, project_id: 10, user_id: 2, message: "我想参与线索整理", status: "pending_secretary_review", ai_review_status: "pending", created_at: now },
   ],
   events: [
-    { id: 20, community_id: 1, title: "OPC 项目评审会", event_type: "project_review", location: "上海", status: "published", visibility: "public", start_time: now, capacity: 20 },
+    { id: 20, community_id: 1, title: "OPC 项目评审会", event_type: "project_review", location: "上海", status: "published", visibility: "public", start_time: now, capacity: 20, fee_amount_cents: 9900, fee_currency: "CNY" },
   ],
   adminLogs: [
     { id: 1, admin_user_id: 1, action: "mock_login", target_type: "admin", target_id: 1, detail_json: { source: "mock" }, created_at: now },
@@ -364,6 +364,16 @@ async function mockCall(action, data) {
     }
     mockState.events = mockState.events.map((item) => item.id === data.eventId ? { ...item, ...event } : item);
     return { success: true, saved: true };
+  }
+  if (action === "adminConfirmEventRegistration") {
+    return {
+      success: true,
+      eventId: data.eventId,
+      userId: data.userId || null,
+      publicUserCode: data.publicUserCode || "",
+      status: "registered",
+      paidAmountCents: data.paidAmountCents || 0,
+    };
   }
   return { success: false, message: `Mock 未实现 ${action}` };
 }

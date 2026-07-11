@@ -475,6 +475,27 @@ async function assertScopedBusinessAction(data) {
     if (nextCommunityId !== undefined) requireCommunityAccess(data, nextCommunityId);
     return;
   }
+  if (action === "adminConfirmEventRegistration") {
+    const rows = await rdbSelect("official_events", "id,community_id", (request) => request.eq("id", id(data.eventId, "eventId")).limit(1)).catch(() => []);
+    const officialEvent = rows[0];
+    if (!officialEvent) {
+      const error = new Error("活动不存在");
+      error.code = "NOT_FOUND";
+      throw error;
+    }
+    requireCommunityAccess(data, officialEvent.community_id);
+    const targetUser = await findUserByPublicCodeOrId(data.userId || data.publicUserCode || data.userCode);
+    if (!targetUser) {
+      const error = new Error("找不到要确认报名的用户");
+      error.code = "NOT_FOUND";
+      throw error;
+    }
+    await assertUserInSessionCommunities(data, targetUser.id);
+    data.userId = Number(targetUser.id);
+    delete data.publicUserCode;
+    delete data.userCode;
+    return;
+  }
   const error = new Error("社区管理员无权执行此操作");
   error.code = "FORBIDDEN";
   throw error;
@@ -1045,6 +1066,16 @@ async function saveCoverAfterBusiness(data, result) {
 }
 
 async function adminProxyAction(data) {
+  const billingActions = new Set([
+    "adminGetAppClientBilling",
+    "adminUpsertAppClient",
+    "adminAdjustAppClientBalance",
+    "adminUpdatePlatformBillingSettings",
+    "adminUpdateAppClientBillingSettings",
+    "adminSetAppClientWalletStatus",
+    "adminRotateAppClientBillingReadToken",
+  ]);
+  if (billingActions.has(data.action)) requireSuperAdmin(data);
   if (data.action === "adminList") {
     await assertAdmin(data);
     const session = sessionFromData(data);

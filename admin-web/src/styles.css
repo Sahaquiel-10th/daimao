@@ -711,6 +711,35 @@ button:disabled {
   gap: 6px;
 }
 
+.form-hint {
+  margin: 0;
+  color: #6f6a63;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.6;
+}
+
+.payment-section {
+  display: grid;
+  gap: 10px;
+  margin: 14px 16px 0;
+  padding: 12px;
+  border: 2px solid #23211f;
+  border-radius: 12px;
+  background: #fff8e8;
+  box-shadow: 2px 2px 0 #23211f;
+}
+
+.payment-section .field {
+  margin: 0;
+  width: 100%;
+}
+
+.payment-section-title {
+  font-size: 14px;
+  font-weight: 950;
+}
+
 .asset-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 92px;
@@ -1007,6 +1036,41 @@ button:disabled {
   white-space: normal;
 }
 
+.billing-toolbar,
+.billing-filters,
+.panel-heading,
+.billing-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.billing-toolbar { padding: 18px 20px; }
+.billing-toolbar h3, .panel-heading h3 { margin: 0; }
+.billing-filters input { width: auto; min-height: 38px; }
+.billing-metrics .metric strong { font-size: clamp(22px, 2.4vw, 34px); }
+.billing-clients tbody tr { cursor: pointer; }
+.billing-clients tbody tr:hover, .selected-row { background: #fff6d9; }
+.billing-warning { display: block; color: #b54827; font-size: 11px; font-weight: 900; }
+.billing-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.billing-scroll { overflow-x: auto; }
+.billing-detail-grid table { min-width: 620px; }
+.positive { color: #18785f; font-weight: 900; }
+.negative { color: #b54827; font-weight: 900; }
+.billing-pagination { justify-content: flex-end; }
+.billing-modal { width: min(680px, calc(100vw - 28px)); max-height: calc(100vh - 40px); overflow: auto; }
+.billing-form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 18px; }
+.billing-form label { display: grid; gap: 6px; color: #4f4943; font-size: 13px; font-weight: 900; }
+.billing-form label:has(textarea), .billing-form .primary-button, .billing-form .check-row { grid-column: 1 / -1; }
+.billing-form small { color: #6f6a63; font-weight: 700; }
+.billing-token { grid-column: 1 / -1; display: grid; gap: 12px; }
+.billing-token textarea { min-height: 120px; font-family: "SFMono-Regular", Consolas, monospace; word-break: break-all; }
+
+@media (max-width: 900px) {
+  .billing-detail-grid { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 1080px) {
   .app-shell,
   .split-view,
@@ -1064,6 +1128,8 @@ button:disabled {
 }
 
 @media (max-width: 560px) {
+  .billing-form { grid-template-columns: 1fr; }
+  .billing-form label { grid-column: 1; }
   .metric-row {
     grid-template-columns: 1fr;
   }
