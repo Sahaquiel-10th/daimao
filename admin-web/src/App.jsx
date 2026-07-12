@@ -32,7 +32,7 @@ const tabs = [
   { key: "events", label: "活动", icon: CalendarDays },
   { key: "pending", label: "待处理", icon: CheckCircle2 },
   { key: "experience", label: "经验", icon: Star, superOnly: true },
-  { key: "billing", label: "AI 电力计价", icon: Zap, superOnly: true },
+  { key: "billing", label: "AI 计费", icon: Zap, superOnly: true },
   { key: "rag", label: "RAG", icon: Search },
   { key: "logs", label: "日志", icon: FileText, superOnly: true },
 ];
