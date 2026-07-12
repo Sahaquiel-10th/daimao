@@ -232,6 +232,20 @@ function errorMessage(err) {
 
 const now = new Date().toISOString();
 const mockState = {
+  platformBillingSettings: {
+    powerPerCny: 1000,
+    referenceInputCnyPerMillion: 35,
+    referenceOutputCnyPerMillion: 210,
+    customerInputCnyPerMillion: 28,
+    customerOutputCnyPerMillion: 168,
+    inputFactor: 0.8,
+    outputFactor: 0.8,
+    displayFactor: 0.8,
+    customerBillingFactor: 0.8,
+    pricingLabel: "优惠价",
+    pricingVersion: 12,
+    pricingEffectiveAt: "2026-07-12 20:00:00",
+  },
   users: [
     { id: 1, public_user_code: "001", openid: "demo_admin_daimao", display_name: "呆猫主理人", status: "active", is_admin: 1, experience_points: 180, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["主理人"], communityName: "OPC 共创营", badgeName: "OPC" }] },
     { id: 2, public_user_code: "002", openid: "demo_operator_ai", display_name: "阿里 AI 产品顾问", status: "active", is_admin: 0, experience_points: 76, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["AI"], communityName: "OPC 共创营", badgeName: "OPC" }], referral: { referrer_user_id: 1, referrer_public_user_code: "001", referrer_display_name: "呆猫主理人", note: "测试引荐" } },
@@ -266,6 +280,28 @@ const mockState = {
 
 async function mockCall(action, data) {
   await new Promise((resolve) => setTimeout(resolve, 180));
+  if (action === "adminGetPlatformBillingSettings") {
+    return { success: true, platformBillingSettings: { ...mockState.platformBillingSettings } };
+  }
+  if (action === "adminUpdatePlatformBillingSettings") {
+    const settings = data.settings || {};
+    const inputFactor = Number(settings.customerInputCnyPerMillion) / 35;
+    const outputFactor = Number(settings.customerOutputCnyPerMillion) / 210;
+    const displayFactor = Math.round((Math.max(inputFactor, outputFactor) + Number.EPSILON) * 100) / 100;
+    mockState.platformBillingSettings = {
+      ...mockState.platformBillingSettings,
+      customerInputCnyPerMillion: Number(settings.customerInputCnyPerMillion),
+      customerOutputCnyPerMillion: Number(settings.customerOutputCnyPerMillion),
+      pricingLabel: settings.pricingLabel,
+      inputFactor,
+      outputFactor,
+      displayFactor,
+      customerBillingFactor: displayFactor,
+      pricingVersion: Number(mockState.platformBillingSettings.pricingVersion || 0) + 1,
+      pricingEffectiveAt: new Date().toISOString(),
+    };
+    return { success: true, platformBillingSettings: { ...mockState.platformBillingSettings } };
+  }
   if (action === "adminList") return { success: true, adminSession: { role: "super_admin", communityIds: [] }, ...mockState };
   if (action === "adminUpdateUser") {
     mockState.users = mockState.users.map((item) => item.id === data.userId ? { ...item, public_user_code: data.patch?.publicUserCode ?? item.public_user_code, display_name: data.patch?.displayName ?? item.display_name, status: data.patch?.status ?? item.status, experience_points: data.patch?.experiencePoints ?? item.experience_points } : item);
