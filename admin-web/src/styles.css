@@ -1056,8 +1056,10 @@ button:disabled {
 .billing-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .billing-scroll { overflow-x: auto; }
 .billing-detail-grid table { min-width: 620px; }
-.billing-record-panel { display: flex; min-height: 720px; flex-direction: column; }
+.billing-record-panel { display: flex; min-height: 470px; flex-direction: column; }
 .billing-record-panel .billing-scroll { flex: 1; }
+.billing-record-actions { display: flex; align-items: center; gap: 8px; }
+.billing-record-actions input { width: 180px; min-height: 34px; }
 .record-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 14px 16px 4px; border-top: 2px solid #23211f; }
 .record-pagination span { color: #6f6a63; font-size: 12px; font-weight: 800; }
 .positive { color: #18785f; font-weight: 900; }
