@@ -29,6 +29,12 @@ function rowClientId(row) { return pick(row, "appClientId", "app_client_id", "cl
 function rowClient(row, clients) { return clients.find((client) => Number(clientId(client)) === Number(rowClientId(row))); }
 function rowClientName(row, clients) { return clientName(rowClient(row, clients) || row) || `客户端 #${rowClientId(row) || "-"}`; }
 function statusTone(status) { return status === "active" ? "green" : status === "frozen" ? "yellow" : "red"; }
+function ledgerType(row) { return pick(row, "entryType", "entry_type"); }
+function visibleLedger(row) { return !["hold", "release"].includes(ledgerType(row)); }
+function ledgerDelta(row) {
+  if (ledgerType(row) === "settlement") return -number(pick(row, "consumedUnits", "consumed_units"));
+  return number(pick(row, "unitsDelta", "deltaUnits", "delta_units", "units_delta", "units"));
+}
 
 export default function BillingPage({ onError, onToast }) {
   const [view, setView] = useState("billing");
@@ -111,7 +117,7 @@ export default function BillingPage({ onError, onToast }) {
     const rows = filteredRows || (type === "usage" ? usageEvents : walletLedger);
     const headers = type === "usage"
       ? ["时间", "客户端", "AppID", "功能", "任务类型", "Token", "基准电力", "计费倍率", "定价标签", "实扣电力"]
-      : ["时间", "客户端", "AppID", "账本类型", "变动前", "变动电力", "变动后", "原因", "凭证号", "幂等键"];
+      : ["时间", "客户端", "AppID", "账本类型", "实际变动", "最终余额", "原因", "凭证号", "幂等键"];
     const values = rows.map((row) => type === "usage" ? [
       pick(row, "createdAt", "created_at"), rowClientName(row, clients), appidOf(rowClient(row, clients) || row),
       pick(row, "action"), pick(row, "taskType", "task_type"), pick(row, "totalTokens", "total_tokens"),
@@ -119,8 +125,8 @@ export default function BillingPage({ onError, onToast }) {
       pick(row.pricingDisplay || {}, "label", "pricingLabel") || pick(row, "pricingLabel", "pricing_label"), pick(row, "chargedUnits", "charged_units"),
     ] : [
       pick(row, "createdAt", "created_at"), rowClientName(row, clients), appidOf(rowClient(row, clients) || row),
-      ledgerLabel(pick(row, "entryType", "entry_type")), pick(row, "balanceBefore", "balance_before"), pick(row, "unitsDelta", "units_delta", "units"),
-      pick(row, "balanceAfter", "balance_after"), pick(row, "reason"), pick(row, "receiptReference", "receipt_reference"), pick(row, "idempotencyKey", "idempotency_key"),
+      ledgerLabel(ledgerType(row)), ledgerDelta(row), pick(row, "balanceAfter", "balance_after"),
+      pick(row, "reason"), pick(row, "receiptReference", "receipt_reference"), pick(row, "idempotencyKey", "idempotency_key"),
     ]);
     const csv = `\ufeff${[headers, ...values].map((line) => line.map(csvCell).join(",")).join("\r\n")}`;
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -154,7 +160,7 @@ export default function BillingPage({ onError, onToast }) {
 
     <section className="panel dm-card">
       <div className="panel-heading"><h3>App Client</h3><span className="muted">充值比例：1 元 = {fmt.format(number(pick(platform, "powerPerCny", "power_per_cny") || 1000))} 电力</span></div>
-      <table className="billing-clients"><thead><tr><th>备注名 / 主体</th><th>AppID</th><th>钱包</th><th>余额</th><th>预警线</th><th>AI 计费</th><th>单次预占</th><th>操作</th></tr></thead>
+      <table className="billing-clients"><thead><tr><th>备注名 / 主体</th><th>AppID</th><th>钱包</th><th>余额</th><th>预警线</th><th>AI 计费</th><th>操作</th></tr></thead>
         <tbody>{clients.length ? clients.map((client) => {
           const id = clientId(client); const settings = settingsOf(client); const status = walletStatus(client);
           return <tr key={id} className={String(id) === String(selectedId) ? "selected-row" : ""} onClick={() => setSelectedId(String(id))}>
@@ -164,7 +170,6 @@ export default function BillingPage({ onError, onToast }) {
             <td><strong>{fmt.format(balanceOf(client))}</strong>{thresholdOf(client) > 0 && balanceOf(client) <= thresholdOf(client) && <span className="billing-warning">低余额</span>}</td>
             <td>{fmt.format(thresholdOf(client))}</td>
             <td><div className="title-stack"><strong>{pick(settings, "billingEnabled", "billing_enabled") === false ? "已停用" : (pick(settings, "chargingMode", "charging_mode") === "free" ? "免费" : "预付费")}</strong><span>{pick(settings, "customerBillingFactor", "customer_billing_factor") == null ? "跟随平台倍率" : `独立 ×${pick(settings, "customerBillingFactor", "customer_billing_factor")}`}</span></div></td>
-            <td>{fmt.format(number(pick(settings, "reserveUnits", "reserve_units")))}</td>
             <td><div className="actions" onClick={(e) => e.stopPropagation()}>
               <button onClick={() => setModal({ type: "adjust", client, mode: "add" })}>增加</button>
               <button onClick={() => setModal({ type: "adjust", client, mode: "subtract" })}>扣减</button>
@@ -174,7 +179,7 @@ export default function BillingPage({ onError, onToast }) {
               <button onClick={() => rotateToken(client)}>只读令牌</button>
             </div></td>
           </tr>;
-        }) : <tr><td colSpan="8"><div className="empty-state"><strong>暂无 App Client</strong><span>新建客户端后会自动创建钱包和计费设置。</span></div></td></tr>}</tbody>
+        }) : <tr><td colSpan="7"><div className="empty-state"><strong>暂无 App Client</strong><span>新建客户端后会自动创建钱包和计费设置。</span></div></td></tr>}</tbody>
       </table>
     </section>
 
@@ -192,14 +197,15 @@ function Metric({ label, value, hint }) { return <div className="metric dm-card"
 function BillingTable({ title, rows, clients, type, page, onPage, onExport }) {
   const [nameFilter, setNameFilter] = useState("");
   const keyword = nameFilter.trim().toLowerCase();
-  const filteredRows = keyword ? rows.filter((row) => rowClientName(row, clients).toLowerCase().includes(keyword)) : rows;
+  const businessRows = type === "ledger" ? rows.filter(visibleLedger) : rows;
+  const filteredRows = keyword ? businessRows.filter((row) => rowClientName(row, clients).toLowerCase().includes(keyword)) : businessRows;
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / DETAIL_PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const visibleRows = filteredRows.slice((safePage - 1) * DETAIL_PAGE_SIZE, safePage * DETAIL_PAGE_SIZE);
   function changeFilter(value) { setNameFilter(value); onPage(1); }
-  return <section className="panel dm-card billing-record-panel"><div className="panel-heading"><div><h3>{title}</h3><span className="muted">{keyword ? `筛选到 ${fmt.format(filteredRows.length)} / ${fmt.format(rows.length)} 条` : `共 ${fmt.format(rows.length)} 条`}</span></div><div className="billing-record-actions"><input aria-label="按客户端备注名筛选" placeholder="按备注名筛选" value={nameFilter} onChange={(e) => changeFilter(e.target.value)} /><button type="button" onClick={() => onExport(filteredRows)} disabled={!filteredRows.length}>导出当前筛选</button></div></div><div className="billing-scroll"><table><thead><tr>{type === "usage" ? <><th>客户端备注名</th><th>时间 / 功能</th><th>Token</th><th>基准</th><th>定价</th><th>实扣</th></> : <><th>客户端备注名</th><th>时间 / 类型</th><th>变动前</th><th>变动</th><th>变动后</th><th>原因</th></>}</tr></thead><tbody>
+  return <section className="panel dm-card billing-record-panel"><div className="panel-heading"><div><h3>{title}</h3><span className="muted">{keyword ? `筛选到 ${fmt.format(filteredRows.length)} / ${fmt.format(businessRows.length)} 条` : `共 ${fmt.format(businessRows.length)} 条`}</span></div><div className="billing-record-actions"><input aria-label="按客户端备注名筛选" placeholder="按备注名筛选" value={nameFilter} onChange={(e) => changeFilter(e.target.value)} /><button type="button" onClick={() => onExport(filteredRows)} disabled={!filteredRows.length}>导出当前筛选</button></div></div><div className="billing-scroll"><table><thead><tr>{type === "usage" ? <><th>客户端备注名</th><th>时间 / 功能</th><th>Token</th><th>基准</th><th>定价</th><th>实扣</th></> : <><th>客户端备注名</th><th>时间 / 类型</th><th>实际变动</th><th>最终余额</th><th>原因</th></>}</tr></thead><tbody>
     {visibleRows.length ? visibleRows.map((row, index) => type === "usage" ? <tr key={row.id || index}><td><strong>{rowClientName(row, clients)}</strong></td><td><div className="title-stack"><strong>{pick(row, "action", "taskType", "task_type") || "AI 请求"}</strong><span>{pick(row, "createdAt", "created_at") || "-"}</span></div></td><td>{fmt.format(number(pick(row, "totalTokens", "total_tokens")))}</td><td>{fmt.format(number(pick(row, "baseUnits", "base_units")))}</td><td>{pick(row.pricingDisplay || {}, "label", "pricingLabel") || pick(row, "pricingLabel", "pricing_label") || "-"} ×{pick(row, "customerBillingFactor", "customer_billing_factor", "billingFactor", "billing_factor") || 1}</td><td><strong>{fmt.format(number(pick(row, "chargedUnits", "charged_units")))}</strong></td></tr>
-      : <tr key={row.id || index}><td><strong>{rowClientName(row, clients)}</strong></td><td><div className="title-stack"><strong>{ledgerLabel(pick(row, "entryType", "entry_type"))}</strong><span>{pick(row, "createdAt", "created_at") || "-"}</span></div></td><td>{fmt.format(number(pick(row, "balanceBefore", "balance_before")))}</td><td className={number(pick(row, "unitsDelta", "units_delta", "units")) >= 0 ? "positive" : "negative"}>{number(pick(row, "unitsDelta", "units_delta", "units")) > 0 ? "+" : ""}{fmt.format(number(pick(row, "unitsDelta", "units_delta", "units")))}</td><td>{fmt.format(number(pick(row, "balanceAfter", "balance_after")))}</td><td>{pick(row, "reason", "receiptReference", "receipt_reference") || "-"}</td></tr>) : <tr><td colSpan="6"><div className="empty-state"><strong>暂无记录</strong></div></td></tr>}
+      : <tr key={row.id || index}><td><strong>{rowClientName(row, clients)}</strong></td><td><div className="title-stack"><strong>{ledgerLabel(ledgerType(row))}</strong><span>{pick(row, "createdAt", "created_at") || "-"}</span></div></td><td className={ledgerDelta(row) >= 0 ? "positive" : "negative"}>{ledgerDelta(row) > 0 ? "+" : ""}{fmt.format(ledgerDelta(row))}</td><td>{fmt.format(number(pick(row, "balanceAfter", "balance_after")))}</td><td>{pick(row, "reason", "receiptReference", "receipt_reference") || "-"}</td></tr>) : <tr><td colSpan={type === "usage" ? "6" : "5"}><div className="empty-state"><strong>暂无记录</strong></div></td></tr>}
   </tbody></table></div><div className="record-pagination"><button disabled={safePage <= 1} onClick={() => onPage(safePage - 1)}>上一页</button><span>第 {safePage} / {totalPages} 页 · 每页 {DETAIL_PAGE_SIZE} 条</span><button disabled={safePage >= totalPages} onClick={() => onPage(safePage + 1)}>下一页</button></div></section>;
 }
 function ledgerLabel(type) { return ({ recharge: "充值", grant: "赠送", refund: "退款", adjustment: "调整", hold: "预占", release: "释放", settlement: "结算" })[type] || type || "-"; }
