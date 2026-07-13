@@ -1743,13 +1743,12 @@ async function processProjectApplicationReviewsRdb(limit) {
         },
         identity,
       });
-      const nextStatus = review.status === "pass" ? "pending_owner_review" : "pending_admin_review";
+      const nextStatus = review.status === "pass" ? "pending_owner_review" : "pending_secretary_review";
       await rdbUpdate(
         "project_applications",
         {
           ai_review_status: review.status,
           ai_review_summary: review.summary,
-          admin_review_deadline_at: review.status === "pass" ? null : new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
           status: nextStatus,
         },
         (request) => request.eq("id", application.id)
@@ -1783,8 +1782,7 @@ async function processProjectApplicationReviewsRdb(limit) {
         {
           ai_review_status: "revise",
           ai_review_summary: `小秘书暂时没有完成自动初筛：${text(err.message, 300)}。已转人工秘书处理。`,
-          status: "pending_admin_review",
-          admin_review_deadline_at: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
+          status: "pending_secretary_review",
         },
         (request) => request.eq("id", application.id)
       ).catch(() => null);
@@ -1821,10 +1819,10 @@ async function processProjectApplicationReviewsMysql(limit) {
         },
         identity,
       });
-      const nextStatus = review.status === "pass" ? "pending_owner_review" : "pending_admin_review";
+      const nextStatus = review.status === "pass" ? "pending_owner_review" : "pending_secretary_review";
       await query(
-        "UPDATE project_applications SET ai_review_status=?, ai_review_summary=?, admin_review_deadline_at=?, status=?, updated_at=NOW() WHERE id=?",
-        [review.status, review.summary, review.status === "pass" ? null : new Date(Date.now() + 72 * 60 * 60 * 1000), nextStatus, application.id]
+        "UPDATE project_applications SET ai_review_status=?, ai_review_summary=?, status=?, updated_at=NOW() WHERE id=?",
+        [review.status, review.summary, nextStatus, application.id]
       );
       await query(
         `INSERT INTO in_app_notifications (user_id,project_id,type,title,content,related_id)
@@ -1851,7 +1849,7 @@ async function processProjectApplicationReviewsMysql(limit) {
     } catch (err) {
       failed += 1;
       await query(
-        "UPDATE project_applications SET ai_review_status='revise', ai_review_summary=?, status='pending_admin_review', admin_review_deadline_at=DATE_ADD(NOW(), INTERVAL 72 HOUR), updated_at=NOW() WHERE id=?",
+        "UPDATE project_applications SET ai_review_status='revise', ai_review_summary=?, status='pending_secretary_review', updated_at=NOW() WHERE id=?",
         [`小秘书暂时没有完成自动初筛：${text(err.message, 300)}。已转人工秘书处理。`, application.id]
       ).catch(() => null);
       results.push({ applicationId: application.id, error: err.message });
@@ -2598,141 +2596,6 @@ async function getRecommendations(event, user) {
      ORDER BY p.is_official_recommended DESC,p.official_sort_weight DESC,p.star_count DESC LIMIT 10`
   );
   return { recommendations: fallback };
-}
-
-async function adminListProjectApplicationReviews(event, user) {
-  assertAdminWebToken(event);
-  await requireAdmin(user);
-  const statuses = Array.isArray(event.statuses) && event.statuses.length
-    ? event.statuses.filter((value) => ["pending_admin_review", "pending_owner_review", "pending_contact_consent", "accepted", "rejected"].includes(value))
-    : ["pending_admin_review"];
-  const limit = Math.min(Math.max(Number(event.limit || 100), 1), 200);
-  const fields = "id,project_id,user_id,message,can_offer,related_experience,ai_review_status,ai_match_score,ai_review_summary,status,admin_review_deadline_at,admin_feedback,admin_decision_by,admin_decision_at,contact_consent_status,created_at,updated_at";
-  const applications = useRdb()
-    ? await rdbSelect("project_applications", fields, (request) => request.in("status", statuses).order("updated_at", { ascending: false }).limit(limit))
-    : await query(`SELECT ${fields} FROM project_applications WHERE status IN (${statuses.map(() => "?").join(",")}) ORDER BY updated_at DESC LIMIT ${limit}`, statuses);
-  const projectIds = unique(applications.map((item) => Number(item.project_id)).filter(Boolean));
-  const userIds = unique(applications.map((item) => Number(item.user_id)).filter(Boolean));
-  const [projects, applicants] = await Promise.all([
-    projectIds.length
-      ? (useRdb()
-        ? rdbSelect("projects", "id,name,creator_user_id,community_id", (request) => request.in("id", projectIds))
-        : query(`SELECT id,name,creator_user_id,community_id FROM projects WHERE id IN (${projectIds.map(() => "?").join(",")})`, projectIds))
-      : [],
-    userIds.length
-      ? (useRdb()
-        ? rdbSelect("users", "id,display_name,public_user_code", (request) => request.in("id", userIds))
-        : query(`SELECT id,display_name,public_user_code FROM users WHERE id IN (${userIds.map(() => "?").join(",")})`, userIds))
-      : [],
-  ]);
-  const projectMap = new Map(projects.map((item) => [Number(item.id), item]));
-  const userMap = new Map(applicants.map((item) => [Number(item.id), item]));
-  await adminLog(user, "list_project_application_reviews", "project_application", null, { statuses, count: applications.length });
-  return {
-    applications: applications.map((item) => ({
-      ...item,
-      project: projectMap.get(Number(item.project_id)) || null,
-      applicant: userMap.get(Number(item.user_id)) || null,
-    })),
-  };
-}
-
-async function adminGetProjectApplicationReview(event, user) {
-  assertAdminWebToken(event);
-  await requireAdmin(user);
-  const applicationId = id(event.applicationId);
-  const applications = useRdb()
-    ? await rdbSelect("project_applications", "*", (request) => request.eq("id", applicationId).limit(1))
-    : await query("SELECT * FROM project_applications WHERE id=? LIMIT 1", [applicationId]);
-  const application = applications[0];
-  if (!application) throw codedError("APPLICATION_NOT_FOUND", "项目申请不存在");
-  const [project, applicant, profileRows, evidenceRecords, reviewLogs] = await Promise.all([
-    findProjectById(application.project_id),
-    findUserById(application.user_id),
-    useRdb()
-      ? rdbSelect("user_profiles", "*", (request) => request.eq("user_id", application.user_id).limit(1))
-      : query("SELECT * FROM user_profiles WHERE user_id=? LIMIT 1", [application.user_id]),
-    useRdb()
-      ? rdbSelect("evidence_records", "*", (request) => request.eq("user_id", application.user_id).order("created_at", { ascending: false }).limit(100))
-      : query("SELECT * FROM evidence_records WHERE user_id=? ORDER BY created_at DESC LIMIT 100", [application.user_id]),
-    useRdb()
-      ? rdbSelect("project_application_review_logs", "*", (request) => request.eq("application_id", applicationId).order("created_at", { ascending: false }).limit(100))
-      : query("SELECT * FROM project_application_review_logs WHERE application_id=? ORDER BY created_at DESC LIMIT 100", [applicationId]),
-  ]);
-  await adminLog(user, "view_project_application_review", "project_application", applicationId, {
-    applicantUserId: application.user_id,
-    evidenceCount: evidenceRecords.length,
-  });
-  return { application, project, applicant, profile: profileRows[0] || null, evidenceRecords, reviewLogs };
-}
-
-async function adminDecideProjectApplication(event, user) {
-  assertAdminWebToken(event);
-  await requireAdmin(user);
-  const applicationId = id(event.applicationId);
-  const decision = text(event.decision, 40);
-  if (!["promote_owner", "request_contact", "reject", "extend_review"].includes(decision)) {
-    throw codedError("VALIDATION_ERROR", "人工审核决定不合法");
-  }
-  const feedback = text(event.feedback, 2000);
-  if (decision === "reject" && !feedback) throw codedError("VALIDATION_ERROR", "拒绝申请时必须填写反馈");
-  const applications = useRdb()
-    ? await rdbSelect("project_applications", "*", (request) => request.eq("id", applicationId).limit(1))
-    : await query("SELECT * FROM project_applications WHERE id=? LIMIT 1", [applicationId]);
-  const application = applications[0];
-  if (!application) throw codedError("APPLICATION_NOT_FOUND", "项目申请不存在");
-  const project = await findProjectById(application.project_id);
-  let status = application.status;
-  let contactConsentStatus = application.contact_consent_status || "not_requested";
-  if (decision === "promote_owner") status = "pending_owner_review";
-  if (decision === "request_contact") {
-    status = "pending_contact_consent";
-    contactConsentStatus = "pending";
-  }
-  if (decision === "reject") status = "rejected";
-  if (decision === "extend_review") status = "pending_admin_review";
-  const patch = {
-    status,
-    contact_consent_status: contactConsentStatus,
-    admin_feedback: feedback || null,
-    admin_decision_by: user.id,
-    admin_decision_at: nowDateTime(),
-    admin_review_deadline_at: decision === "extend_review" ? new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString() : null,
-  };
-  if (useRdb()) {
-    await rdbUpdate("project_applications", patch, (request) => request.eq("id", applicationId));
-  } else {
-    await query(
-      "UPDATE project_applications SET status=?,contact_consent_status=?,admin_feedback=?,admin_decision_by=?,admin_decision_at=?,admin_review_deadline_at=?,updated_at=NOW() WHERE id=?",
-      [patch.status, patch.contact_consent_status, patch.admin_feedback, patch.admin_decision_by, patch.admin_decision_at, patch.admin_review_deadline_at, applicationId]
-    );
-  }
-  if (decision === "promote_owner" && project.creator_user_id) {
-    const content = `「${project.name}」有一份申请经超管复核后递交，请根据申请表人工判断。`;
-    if (useRdb()) {
-      await rdbInsert("in_app_notifications", { user_id: project.creator_user_id, project_id: project.id, type: "project_review", title: "超管递交了项目申请", content, related_id: applicationId });
-    } else {
-      await query(`INSERT INTO in_app_notifications (user_id,project_id,type,title,content,related_id) VALUES (?,?,'project_review','超管递交了项目申请',?,?)`, [project.creator_user_id, project.id, content, applicationId]);
-    }
-  }
-  if (decision === "request_contact" || decision === "reject") {
-    const title = decision === "request_contact" ? "平台希望进一步联系你" : "项目申请已有人工反馈";
-    const content = decision === "request_contact"
-      ? `平台人工复核后希望进一步沟通。是否同意把微信号提供给「${project.name}」相关负责人？`
-      : feedback;
-    if (useRdb()) {
-      await rdbInsert("in_app_notifications", { user_id: application.user_id, project_id: project.id, type: "project_application", title, content, related_id: applicationId });
-    } else {
-      await query(`INSERT INTO in_app_notifications (user_id,project_id,type,title,content,related_id) VALUES (?,?,'project_application',?,?,?)`, [application.user_id, project.id, title, content, applicationId]);
-    }
-  }
-  await adminLog(user, "decide_project_application", "project_application", applicationId, {
-    decision,
-    feedback,
-    beforeStatus: application.status,
-    status,
-  });
-  return { applicationId, decision, status, contactConsentStatus };
 }
 
 async function adminList(event, user) {
@@ -5268,9 +5131,6 @@ const actions = {
   authorizeReminder,
   getRecommendations,
   adminList,
-  adminListProjectApplicationReviews,
-  adminGetProjectApplicationReview,
-  adminDecideProjectApplication,
   adminListUsers,
   adminSetUserStatus,
   adminSetUserAdmin,
