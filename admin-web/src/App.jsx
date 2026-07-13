@@ -19,9 +19,7 @@ import {
 } from "lucide-react";
 import { callAdmin, hasToken, loginAdmin, saveAccessKey, saveToken, uploadAsset } from "./api";
 import BillingPage from "./Billing";
-import logoCutout from "./assets/logo-cutout.png";
-import catRub from "./assets/cat-rub-cutout.png";
-import catStretch from "./assets/cat-stretch-cutout.png";
+import opcLogo from "./assets/opc-data-center-logo.svg";
 
 const tabs = [
   { key: "overview", label: "概览", icon: Activity },
@@ -106,6 +104,14 @@ function statusLabel(value) {
     admin_interview: "管理员访谈",
     admin_evidence: "管理员证据",
     risk_note: "风险备注",
+    pending_secretary_review: "等待 AI 审核",
+    pending_admin_review: "等待超管审核",
+    pending_owner_review: "等待项目主理人审核",
+    pending_contact_consent: "等待联系授权",
+    accepted: "已通过",
+    rejected: "已拒绝",
+    pass: "AI 建议通过",
+    revise: "AI 建议复核",
   };
   return labels[value] || value || "-";
 }
@@ -122,6 +128,31 @@ function userName(users, userId) {
   return user?.profile?.name || user?.display_name || `用户 #${userId}`;
 }
 
+function projectName(projects, projectId) {
+  if (!projectId) return "-";
+  const project = (projects || []).find((item) => Number(item.id) === Number(projectId));
+  return project?.name || `项目 #${projectId}`;
+}
+
+function parseDetail(value) {
+  if (!value) return "";
+  if (typeof value === "string") {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch (err) {
+      return value;
+    }
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+function deadlineInfo(value) {
+  if (!value) return { label: "未设置", overdue: false };
+  const time = new Date(value).getTime();
+  if (Number.isNaN(time)) return { label: formatDate(value), overdue: false };
+  return { label: formatDate(value), overdue: time <= Date.now() };
+}
+
 function buildPendingItems(data) {
   if (!data) return [];
   const items = [];
@@ -130,11 +161,14 @@ function buildPendingItems(data) {
     .forEach((item) => {
       items.push({
         id: `application-${item.id}`,
+        kind: "application",
+        targetId: item.id,
         type: "项目申请",
-        title: `项目 #${item.project_id} · ${userName(data.users, item.user_id)}`,
+        title: `${projectName(data.projects, item.project_id)} · ${userName(data.users, item.user_id)}`,
         status: item.status,
         hint: item.ai_review_summary || item.message || "等待审核",
         created_at: item.created_at,
+        raw: item,
       });
     });
   (data.ragIndexJobs || [])
@@ -142,6 +176,7 @@ function buildPendingItems(data) {
     .forEach((item) => {
       items.push({
         id: `rag-${item.id}`,
+        kind: "rag",
         type: "RAG 索引",
         title: `Source #${item.source_id}`,
         status: item.status,
@@ -154,11 +189,14 @@ function buildPendingItems(data) {
     .forEach((item) => {
       items.push({
         id: `evidence-${item.id}`,
+        kind: "candidateEvidence",
+        targetId: item.id,
         type: "候选证据",
         title: `${userName(data.users, item.user_id)} · ${statusLabel(item.evidence_type)}`,
         status: item.status,
         hint: item.content,
         created_at: item.created_at,
+        raw: item,
       });
     });
   return items.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()).slice(0, 80);
@@ -308,6 +346,10 @@ export default function App() {
   const [projectManage, setProjectManage] = useState(null);
   const [eventDraft, setEventDraft] = useState(null);
   const [eventRegistrationDraft, setEventRegistrationDraft] = useState(null);
+  const [applicationReviews, setApplicationReviews] = useState([]);
+  const [applicationReviewDetail, setApplicationReviewDetail] = useState(null);
+  const [applicationDecision, setApplicationDecision] = useState({ decision: "promote_owner", feedback: "" });
+  const [reviewLoading, setReviewLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const [errorNeedsLogin, setErrorNeedsLogin] = useState(false);
 
@@ -413,12 +455,26 @@ export default function App() {
   const adminSession = data?.adminSession || null;
   const isSuperAdmin = adminSession?.role !== "community_admin";
   const visibleTabs = useMemo(() => tabs.filter((tab) => !tab.superOnly || isSuperAdmin), [isSuperAdmin]);
+  const reviewApplications = useMemo(() => {
+    const merged = new Map();
+    (data?.projectApplications || [])
+      .filter((item) => ["pending_secretary_review", "pending_admin_review", "pending_owner_review", "pending_contact_consent"].includes(item.status) || item.ai_review_status === "pending")
+      .forEach((item) => merged.set(Number(item.id), item));
+    applicationReviews.forEach((item) => merged.set(Number(item.id), item));
+    return [...merged.values()].sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime());
+  }, [data, applicationReviews]);
+  const candidateEvidence = useMemo(() => pendingItems.filter((item) => item.kind === "candidateEvidence"), [pendingItems]);
+  const ragPendingItems = useMemo(() => pendingItems.filter((item) => item.kind === "rag"), [pendingItems]);
 
   useEffect(() => {
     if (!visibleTabs.some((tab) => tab.key === activeTab)) {
       setActiveTab("overview");
     }
   }, [activeTab, visibleTabs]);
+
+  useEffect(() => {
+    if (activeTab === "pending" && isSuperAdmin) loadApplicationReviews();
+  }, [activeTab, isSuperAdmin]);
 
   async function loadUserEvidence(userId) {
     if (!userId) {
@@ -428,6 +484,54 @@ export default function App() {
     const result = await callAdmin("adminListUserEvidence", { userId });
     setUserEvidence(result.evidence || []);
     return result.evidence || [];
+  }
+
+  async function loadApplicationReviews() {
+    setReviewLoading(true);
+    try {
+      const result = await callAdmin("adminListProjectApplicationReviews", {
+        statuses: ["pending_admin_review", "pending_owner_review", "pending_contact_consent"],
+        limit: 200,
+      });
+      setApplicationReviews(result.applications || []);
+      return result.applications || [];
+    } catch (err) {
+      showError(err, "申请审核列表加载失败");
+      return [];
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  async function openApplicationReview(applicationId) {
+    setReviewLoading(true);
+    try {
+      const result = await callAdmin("adminGetProjectApplicationReview", { applicationId });
+      setApplicationReviewDetail(result);
+      setApplicationDecision({ decision: "promote_owner", feedback: result.application?.admin_feedback || "" });
+    } catch (err) {
+      showError(err, "申请详情加载失败");
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  async function decideApplication() {
+    const applicationId = applicationReviewDetail?.application?.id;
+    if (!applicationId) return;
+    if (applicationDecision.decision === "reject" && !applicationDecision.feedback.trim()) {
+      showError(new Error("拒绝申请时必须填写反馈"));
+      return;
+    }
+    const ok = await run("adminDecideProjectApplication", {
+      applicationId,
+      decision: applicationDecision.decision,
+      feedback: applicationDecision.feedback.trim(),
+    }, "申请审核决定已保存");
+    if (ok) {
+      setApplicationReviewDetail(null);
+      await loadApplicationReviews();
+    }
   }
 
   async function run(action, payload, successMessage = "操作已完成") {
@@ -593,12 +697,12 @@ export default function App() {
     return (
       <main className="login-shell">
         <form className="login-panel dm-card" onSubmit={login}>
-          <img className="login-cat" src={catRub} alt="" />
+          <img className="login-brand-mark" src={opcLogo} alt="" />
           <div className="brand-line">
-            <img src={logoCutout} alt="" />
+            <img src={opcLogo} alt="OPC 数据中心" />
             <div>
-              <p className="eyebrow">DAIMAO ADMIN</p>
-              <h1>呆猫管理后台</h1>
+              <p className="eyebrow">OPC DATA CENTER</p>
+              <h1>OPC 数据中心</h1>
             </div>
           </div>
           {error && <div className="login-error">{error}</div>}
@@ -631,8 +735,8 @@ export default function App() {
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand-line sidebar-brand">
-          <img src={logoCutout} alt="" />
-          <h1>呆猫后台</h1>
+          <img src={opcLogo} alt="OPC 数据中心" />
+          <h1>OPC 数据中心</h1>
         </div>
         <nav>
           {visibleTabs.map((tab) => {
@@ -699,7 +803,7 @@ export default function App() {
                 <p className="eyebrow">运营驾驶舱</p>
                 <h2>社区、项目、活动和人，都在同一张地图里。</h2>
               </div>
-              <img src={catStretch} alt="" />
+              <img src={opcLogo} alt="" />
             </div>
             <div className="metric-row">
               {stats.map((item) => (
@@ -1060,17 +1164,71 @@ export default function App() {
           <section className="content-grid">
             <section className="panel dm-card">
               <div className="panel-title-row">
-                <h3>待处理中心</h3>
+                <div>
+                  <h3>项目申请审核</h3>
+                  <p className="muted small-muted">查看申请资料和 AI 审核结果，再决定递交项目主理人、请求联系、拒绝或延长审核。</p>
+                </div>
+                {isSuperAdmin && <div className="inline-actions">
+                  <button type="button" onClick={loadApplicationReviews} disabled={reviewLoading}>刷新申请</button>
+                  <button
+                    type="button"
+                    onClick={() => run("processProjectApplicationReviews", { limit: 20 }, "AI 审核任务已处理").then((ok) => ok && loadApplicationReviews())}
+                    disabled={loading || reviewLoading}
+                  >
+                    处理待 AI 审核
+                  </button>
+                </div>}
+              </div>
+              <ProjectApplicationReviewTable
+                applications={reviewApplications}
+                projects={data?.projects || []}
+                users={data?.users || []}
+                onOpen={openApplicationReview}
+                canReview={isSuperAdmin}
+              />
+            </section>
+            <section className="panel dm-card">
+              <div className="panel-title-row">
+                <div>
+                  <h3>候选证据审核</h3>
+                  <p className="muted small-muted">确认后证据可进入后续业务使用；拒绝后保留记录但不再作为候选项。</p>
+                </div>
+              </div>
+              <CandidateEvidenceTable
+                items={candidateEvidence}
+                canReview={isSuperAdmin}
+                onReview={(item, status) => {
+                  const label = status === "confirmed" ? "通过" : "拒绝";
+                  if (!window.confirm(`确认${label}这条候选证据？`)) return;
+                  run("adminReviewCandidate", { targetType: "evidence", targetId: item.targetId, status }, `候选证据已${label}`);
+                }}
+              />
+            </section>
+            {!!ragPendingItems.length && <section className="panel dm-card">
+              <div className="panel-title-row">
+                <h3>索引任务</h3>
                 <button
                   type="button"
                   onClick={() => run("processRagIndexJobs", { limit: 20 }, "已触发待索引处理")}
-                  disabled={loading || !pendingItems.some((item) => item.type === "RAG 索引" && item.status === "pending")}
+                  disabled={loading || !ragPendingItems.some((item) => item.status === "pending")}
                 >
                   立即处理待索引
                 </button>
               </div>
-              <PendingTable items={pendingItems} />
+              <PendingTable items={ragPendingItems} />
             </section>
+            }
+            {applicationReviewDetail && (
+              <Modal title="项目申请审核详情" onClose={() => setApplicationReviewDetail(null)} wide>
+                <ProjectApplicationReviewDetail
+                  detail={applicationReviewDetail}
+                  decision={applicationDecision}
+                  onDecisionChange={setApplicationDecision}
+                  onSubmit={decideApplication}
+                  disabled={loading || reviewLoading}
+                />
+              </Modal>
+            )}
           </section>
         )}
 
@@ -2383,7 +2541,7 @@ function EventEditor({ draft, onChange, onSubmit, onUpload, communities = [], is
       <div className="payment-section">
         <div className="payment-section-title">报名与外部支付</div>
         <p className="form-hint">
-          0 元表示免费活动，可在呆猫内直接报名；大于 0 元表示由所属社区小程序收款，呆猫不会直接报名成功，只等待外部社区回传支付成功记录。
+          0 元表示免费活动，可在 OPC 数据中心内直接报名；大于 0 元表示由所属社区小程序收款，OPC 数据中心不会直接报名成功，只等待外部社区回传支付成功记录。
         </p>
         <Field label="报名费（元）">
           <input
@@ -2453,7 +2611,7 @@ function EventRegistrationConfirm({ draft, onChange, onSubmit }) {
   return (
     <aside className="editor-panel embedded-editor">
       <p className="form-hint">
-        这里只记录其他社区小程序已完成支付后的报名结果。呆猫不收款、不创建支付订单。
+        这里只记录其他社区小程序已完成支付后的报名结果。OPC 数据中心不收款、不创建支付订单。
       </p>
       <Field label="活动">
         <input value={`${draft.title || ""} #${draft.eventId || ""}`} disabled />
@@ -2490,6 +2648,154 @@ function EventRegistrationConfirm({ draft, onChange, onSubmit }) {
       </Field>
       <button className="primary-button" disabled={!draft.userRef} onClick={onSubmit}>确认报名成功</button>
     </aside>
+  );
+}
+
+function ProjectApplicationReviewTable({ applications, projects, users, onOpen, canReview }) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>项目 / 申请人</th>
+          <th>AI 审核</th>
+          <th>申请状态</th>
+          <th>审核截止</th>
+          <th>申请时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {applications.length ? applications.map((application) => {
+          const project = application.project;
+          const applicant = application.applicant;
+          const deadline = deadlineInfo(application.admin_review_deadline_at);
+          return (
+            <tr key={application.id}>
+              <td>
+                <div className="title-stack">
+                  <strong>{project?.name || projectName(projects, application.project_id)}</strong>
+                  <span>{applicant?.display_name || userName(users, application.user_id)} · 申请 #{application.id}</span>
+                </div>
+              </td>
+              <td>
+                <div className="title-stack">
+                  <Badge tone={application.ai_review_status === "pass" ? "green" : application.ai_review_status === "revise" ? "yellow" : "default"}>{statusLabel(application.ai_review_status)}</Badge>
+                  <span>{application.ai_match_score == null ? "暂无评分" : `匹配分 ${application.ai_match_score}`}</span>
+                </div>
+              </td>
+              <td><Badge tone={application.status === "rejected" ? "red" : application.status === "accepted" ? "green" : "yellow"}>{statusLabel(application.status)}</Badge></td>
+              <td>
+                <div className="title-stack">
+                  <span>{deadline.label}</span>
+                  {deadline.overdue && application.status === "pending_admin_review" && <Badge tone="red">已超时</Badge>}
+                </div>
+              </td>
+              <td>{formatDate(application.created_at)}</td>
+              <td><button type="button" onClick={() => onOpen(application.id)} disabled={!canReview}>查看并审核</button></td>
+            </tr>
+          );
+        }) : (
+          <tr><td colSpan="6"><EmptyState title="暂无待审核申请">新的申请或 AI 复核结果会显示在这里。</EmptyState></td></tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function ProjectApplicationReviewDetail({ detail, decision, onDecisionChange, onSubmit, disabled }) {
+  const application = detail.application || {};
+  const project = detail.project || {};
+  const applicant = detail.applicant || {};
+  const profile = detail.profile || {};
+  const evidence = detail.evidenceRecords || [];
+  const logs = detail.reviewLogs || [];
+  const deadline = deadlineInfo(application.admin_review_deadline_at);
+  const aiDetail = parseDetail(application.ai_review_detail_json);
+  return (
+    <div className="application-review-detail">
+      <section className="review-summary-grid">
+        <div className="review-summary-card"><span>项目</span><strong>{project.name || `#${application.project_id}`}</strong></div>
+        <div className="review-summary-card"><span>申请人</span><strong>{applicant.display_name || applicant.public_user_code || `#${application.user_id}`}</strong></div>
+        <div className="review-summary-card"><span>当前状态</span><strong>{statusLabel(application.status)}</strong></div>
+        <div className={`review-summary-card ${deadline.overdue ? "review-overdue" : ""}`}><span>审核截止</span><strong>{deadline.label}{deadline.overdue ? " · 已超时" : ""}</strong></div>
+      </section>
+
+      <section className="review-block">
+        <h4>申请内容</h4>
+        <dl className="review-fields">
+          <div><dt>申请说明</dt><dd>{application.message || "-"}</dd></div>
+          <div><dt>可以贡献</dt><dd>{application.can_offer || "-"}</dd></div>
+          <div><dt>相关经历</dt><dd>{application.related_experience || "-"}</dd></div>
+          <div><dt>个人资料</dt><dd>{[profile.name, profile.job, profile.company, profile.city].filter(Boolean).join(" · ") || "-"}</dd></div>
+        </dl>
+      </section>
+
+      <section className="review-block ai-review-block">
+        <div className="section-title-row">
+          <h4>AI 审核结果</h4>
+          <div className="inline-actions">
+            <Badge tone={application.ai_review_status === "pass" ? "green" : application.ai_review_status === "revise" ? "yellow" : "default"}>{statusLabel(application.ai_review_status)}</Badge>
+            {application.ai_match_score != null && <Badge>匹配分 {application.ai_match_score}</Badge>}
+          </div>
+        </div>
+        <p>{application.ai_review_summary || "AI 尚未给出审核摘要。"}</p>
+        {aiDetail && <details><summary>查看 AI 详细判断</summary><pre>{aiDetail.slice(0, 8000)}</pre></details>}
+      </section>
+
+      {!!evidence.length && <section className="review-block">
+        <h4>申请人证据摘要</h4>
+        <div className="review-evidence-list">
+          {evidence.slice(0, 10).map((item) => (
+            <article key={item.id}>
+              <div className="section-title-row"><strong>{item.title || statusLabel(item.evidence_type) || `证据 #${item.id}`}</strong><Badge>{statusLabel(item.status)}</Badge></div>
+              <p>{String(item.content || item.summary || "-").slice(0, 500)}</p>
+            </article>
+          ))}
+        </div>
+      </section>}
+
+      {!!logs.length && <section className="review-block">
+        <h4>审核记录</h4>
+        <div className="review-log-list">
+          {logs.slice(0, 10).map((item) => <div key={item.id}><strong>{item.action || item.review_type || item.status || "审核记录"}</strong><span>{parseDetail(item.summary || item.detail || item.message || "-").slice(0, 1000)}</span><time>{formatDate(item.created_at)}</time></div>)}
+        </div>
+      </section>}
+
+      <section className="review-block review-decision-block">
+        <h4>人工审核决定</h4>
+        <Field label="处理方式">
+          <select value={decision.decision} onChange={(event) => onDecisionChange({ ...decision, decision: event.target.value })}>
+            <option value="promote_owner">通过复核，递交项目主理人</option>
+            <option value="request_contact">请求申请人授权联系方式</option>
+            <option value="reject">拒绝申请</option>
+            <option value="extend_review">延长审核 72 小时</option>
+          </select>
+        </Field>
+        <Field label={decision.decision === "reject" ? "给申请人的反馈（必填）" : "审核反馈（可选）"}>
+          <textarea value={decision.feedback} onChange={(event) => onDecisionChange({ ...decision, feedback: event.target.value })} placeholder={decision.decision === "reject" ? "请说明拒绝原因，申请人会收到这段反馈。" : "记录人工判断依据或后续说明。"} />
+        </Field>
+        <button className="primary-button" type="button" onClick={onSubmit} disabled={disabled || (decision.decision === "reject" && !decision.feedback.trim())}>确认提交审核决定</button>
+      </section>
+    </div>
+  );
+}
+
+function CandidateEvidenceTable({ items, onReview, canReview }) {
+  return (
+    <table>
+      <thead><tr><th>用户 / 类型</th><th>证据内容</th><th>可信度</th><th>提交时间</th><th>操作</th></tr></thead>
+      <tbody>
+        {items.length ? items.map((item) => (
+          <tr key={item.id}>
+            <td><div className="title-stack"><strong>{item.title}</strong><span>{statusLabel(item.raw?.evidence_type)}</span></div></td>
+            <td className="muted-cell">{String(item.raw?.content || item.hint || "-").slice(0, 300)}</td>
+            <td>{item.raw?.confidence == null ? "-" : item.raw.confidence}</td>
+            <td>{formatDate(item.created_at)}</td>
+            <td><div className="inline-actions"><button type="button" onClick={() => onReview(item, "confirmed")} disabled={!canReview}>通过</button><button type="button" className="danger-button" onClick={() => onReview(item, "rejected")} disabled={!canReview}>拒绝</button></div></td>
+          </tr>
+        )) : <tr><td colSpan="5"><EmptyState title="暂无候选证据">需要人工判断的证据会显示在这里。</EmptyState></td></tr>}
+      </tbody>
+    </table>
   );
 }
 

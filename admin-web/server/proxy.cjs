@@ -189,7 +189,7 @@ const defaultExperienceRules = [
   { rule_key: "register_profile", label: "注册并保存名片", description: "首次完成名片资料。", points: 10, status: "active", sort_order: 10 },
   { rule_key: "card_viewed_by_other", label: "有人碰你的名片", description: "别人通过 NFC 或分享打开并保存你的名片。", points: 2, status: "active", sort_order: 20 },
   { rule_key: "view_other_card", label: "你碰别人的名片", description: "你主动打开并保存别人的名片。", points: 1, status: "active", sort_order: 30 },
-  { rule_key: "share_card", label: "分享自己的名片", description: "分享呆猫名片。", points: 1, status: "active", sort_order: 40 },
+  { rule_key: "share_card", label: "分享自己的名片", description: "分享 OPC 数据中心名片。", points: 1, status: "active", sort_order: 40 },
   { rule_key: "watch_project", label: "围观项目", description: "首次围观一个项目。", points: 1, status: "active", sort_order: 50 },
   { rule_key: "apply_project", label: "提交项目申请", description: "提交一次有效项目申请。", points: 3, status: "active", sort_order: 60 },
   { rule_key: "join_project", label: "被项目接受参与", description: "项目主理人接受申请。", points: 20, status: "active", sort_order: 70 },
@@ -1355,5 +1355,5 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`daimao admin api listening on http://${host}:${port}/api/admin`);
+  console.log(`OPC data center admin api listening on http://${host}:${port}/api/admin`);
 });

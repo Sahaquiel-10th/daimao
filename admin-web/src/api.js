@@ -247,8 +247,8 @@ const mockState = {
     pricingEffectiveAt: "2026-07-12 20:00:00",
   },
   users: [
-    { id: 1, public_user_code: "001", openid: "demo_admin_daimao", display_name: "呆猫主理人", status: "active", is_admin: 1, experience_points: 180, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["主理人"], communityName: "OPC 共创营", badgeName: "OPC" }] },
-    { id: 2, public_user_code: "002", openid: "demo_operator_ai", display_name: "阿里 AI 产品顾问", status: "active", is_admin: 0, experience_points: 76, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["AI"], communityName: "OPC 共创营", badgeName: "OPC" }], referral: { referrer_user_id: 1, referrer_public_user_code: "001", referrer_display_name: "呆猫主理人", note: "测试引荐" } },
+    { id: 1, public_user_code: "001", openid: "demo_admin_opc", display_name: "OPC 数据中心主理人", status: "active", is_admin: 1, experience_points: 180, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["主理人"], communityName: "OPC 共创营", badgeName: "OPC" }] },
+    { id: 2, public_user_code: "002", openid: "demo_operator_ai", display_name: "阿里 AI 产品顾问", status: "active", is_admin: 0, experience_points: 76, created_at: now, communities: [{ community_id: 1, status: "active", tags: ["AI"], communityName: "OPC 共创营", badgeName: "OPC" }], referral: { referrer_user_id: 1, referrer_public_user_code: "001", referrer_display_name: "OPC 数据中心主理人", note: "测试引荐" } },
     { id: 3, public_user_code: "003", openid: "demo_sales_growth", display_name: "增长销售合伙人", status: "disabled", is_admin: 0, experience_points: 63, created_at: now },
   ],
   communities: [
@@ -262,7 +262,10 @@ const mockState = {
     { id: 11, community_id: 1, name: "城市私董会活动运营系统", status: "draft", visibility: "private", is_official_recommended: 0, official_sort_weight: 20, star_count: 8, stage: "内测", tags: ["社区", "活动"], updated_at: now },
   ],
   projectApplications: [
-    { id: 101, project_id: 10, user_id: 2, message: "我想参与线索整理", status: "pending_secretary_review", ai_review_status: "pending", created_at: now },
+    { id: 101, project_id: 10, user_id: 2, message: "我想参与线索整理，并负责把现有销售线索清洗成可跟进的结构化名单。", can_offer: "AI 工作流搭建、销售数据清洗", related_experience: "曾为团队搭建过线索自动分类流程", status: "pending_admin_review", ai_review_status: "revise", ai_match_score: 82, ai_review_summary: "能力与项目目标较匹配，但需要人工确认可投入时间和历史交付情况。", ai_review_detail_json: { strengths: ["有相关自动化经验", "能力标签匹配"], risks: ["缺少可验证的交付链接"] }, admin_review_deadline_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), created_at: now, updated_at: now },
+  ],
+  evidence: [
+    { id: 501, user_id: 2, evidence_type: "admin_interview", title: "管理员访谈记录", content: "申请人曾独立完成销售线索清洗与自动分类工作流。", confidence: 0.86, status: "candidate", created_at: now },
   ],
   events: [
     { id: 20, community_id: 1, title: "OPC 项目评审会", event_type: "project_review", location: "上海", status: "published", visibility: "public", start_time: now, capacity: 20, fee_amount_cents: 9900, fee_currency: "CNY" },
@@ -303,6 +306,49 @@ async function mockCall(action, data) {
     return { success: true, platformBillingSettings: { ...mockState.platformBillingSettings } };
   }
   if (action === "adminList") return { success: true, adminSession: { role: "super_admin", communityIds: [] }, ...mockState };
+  if (action === "adminListProjectApplicationReviews") {
+    const statuses = data.statuses || [];
+    const applications = mockState.projectApplications
+      .filter((item) => !statuses.length || statuses.includes(item.status))
+      .map((item) => ({
+        ...item,
+        project: mockState.projects.find((project) => project.id === item.project_id) || null,
+        applicant: mockState.users.find((user) => user.id === item.user_id) || null,
+      }));
+    return { success: true, applications };
+  }
+  if (action === "adminGetProjectApplicationReview") {
+    const application = mockState.projectApplications.find((item) => Number(item.id) === Number(data.applicationId));
+    if (!application) return { success: false, message: "项目申请不存在" };
+    const applicant = mockState.users.find((item) => item.id === application.user_id) || null;
+    return {
+      success: true,
+      application,
+      project: mockState.projects.find((item) => item.id === application.project_id) || null,
+      applicant,
+      profile: { name: applicant?.display_name || "", job: "AI 产品顾问", company: "示例科技", city: "上海" },
+      evidenceRecords: mockState.evidence.filter((item) => item.user_id === application.user_id),
+      reviewLogs: [],
+    };
+  }
+  if (action === "adminDecideProjectApplication") {
+    const statusByDecision = { promote_owner: "pending_owner_review", request_contact: "pending_contact_consent", reject: "rejected", extend_review: "pending_admin_review" };
+    mockState.projectApplications = mockState.projectApplications.map((item) => Number(item.id) === Number(data.applicationId) ? {
+      ...item,
+      status: statusByDecision[data.decision] || item.status,
+      admin_feedback: data.feedback || "",
+      admin_review_deadline_at: data.decision === "extend_review" ? new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString() : null,
+      updated_at: new Date().toISOString(),
+    } : item);
+    return { success: true, applicationId: data.applicationId, decision: data.decision, status: statusByDecision[data.decision] };
+  }
+  if (action === "processProjectApplicationReviews") return { success: true, checked: 0, completed: 0, failed: 0 };
+  if (action === "adminReviewCandidate") {
+    if (data.targetType === "evidence") {
+      mockState.evidence = mockState.evidence.map((item) => Number(item.id) === Number(data.targetId) ? { ...item, status: data.status } : item);
+    }
+    return { success: true, saved: true };
+  }
   if (action === "adminUpdateUser") {
     mockState.users = mockState.users.map((item) => item.id === data.userId ? { ...item, public_user_code: data.patch?.publicUserCode ?? item.public_user_code, display_name: data.patch?.displayName ?? item.display_name, status: data.patch?.status ?? item.status, experience_points: data.patch?.experiencePoints ?? item.experience_points } : item);
     return { success: true, saved: true };
