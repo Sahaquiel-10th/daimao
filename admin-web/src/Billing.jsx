@@ -36,7 +36,7 @@ function ledgerDelta(row) {
   return number(pick(row, "unitsDelta", "deltaUnits", "delta_units", "units_delta", "units"));
 }
 
-export default function BillingPage({ onError, onToast }) {
+export default function BillingPage({ onError, onToast, isSuperAdmin = true, communities = [] }) {
   const [view, setView] = useState("billing");
   const [dates, setDates] = useState(initialDates);
   const [page, setPage] = useState(1);
@@ -77,19 +77,25 @@ export default function BillingPage({ onError, onToast }) {
 
   useEffect(() => { load(1); }, []);
   const clients = result?.clients || [];
-  const summary = result?.usageSummary || {};
   const platform = result?.platformBillingSettings || {};
   const selected = clients.find((item) => String(clientId(item)) === String(selectedId));
   const usageEvents = result?.usageEvents || [];
   const walletLedger = result?.walletLedger || [];
   const rechargeOrders = result?.rechargeOrders || [];
+  const summary = useMemo(() => ({
+    baseUnits: usageEvents.reduce((sum, row) => sum + number(pick(row, "baseUnits", "base_units")), 0),
+    chargedUnits: usageEvents.reduce((sum, row) => sum + number(pick(row, "chargedUnits", "charged_units")), 0),
+    totalTokens: usageEvents.reduce((sum, row) => sum + number(pick(row, "totalTokens", "total_tokens")), 0),
+    requestCount: usageEvents.length,
+  }), [usageEvents]);
   const totals = useMemo(() => ({
     balance: clients.reduce((sum, item) => sum + balanceOf(item), 0),
+    threshold: clients.reduce((sum, item) => sum + thresholdOf(item), 0),
     low: clients.filter((item) => thresholdOf(item) > 0 && balanceOf(item) <= thresholdOf(item)).length,
     frozen: clients.filter((item) => walletStatus(item) !== "active").length,
   }), [clients]);
 
-  if (view === "pricing") return <PricingPage onError={onError} onToast={onToast} onBack={() => setView("billing")} />;
+  if (view === "pricing" && isSuperAdmin) return <PricingPage onError={onError} onToast={onToast} onBack={() => setView("billing")} />;
 
   async function mutate(action, payload, message) {
     setLoading(true);
@@ -140,46 +146,50 @@ export default function BillingPage({ onError, onToast }) {
 
   return <section className="content-grid billing-page">
     <div className="billing-toolbar dm-card">
-      <div><p className="eyebrow">AI POWER CENTER</p><h3>电力总览与账单</h3></div>
+      <div><p className="eyebrow">AI POWER CENTER</p><h3>{isSuperAdmin ? "电力总览与账单" : `${communities.map((item) => item.name).filter(Boolean).join("、") || "本社区"} · 电力账单`}</h3></div>
       <div className="billing-filters">
         <input type="date" value={dates.start} onChange={(e) => setDates({ ...dates, start: e.target.value })} />
         <span>至</span>
         <input type="date" value={dates.end} onChange={(e) => setDates({ ...dates, end: e.target.value })} />
         <button onClick={() => { setPage(1); load(1); }} disabled={loading}>查询</button>
-        <button className="primary-button" onClick={() => setModal({ type: "client" })}>新建客户端</button>
-        <button onClick={() => setView("pricing")}>AI 电力计价</button>
+        {isSuperAdmin ? <>
+          <button className="primary-button" onClick={() => setModal({ type: "client" })}>新建客户端</button>
+          <button onClick={() => setView("pricing")}>AI 电力计价</button>
+        </> : <button className="primary-button recharge-button" onClick={() => setModal({ type: "recharge-contact" })}>电力充值</button>}
       </div>
     </div>
 
-    <div className="metric-row billing-metrics">
-      <Metric label="当前总余额" value={`${fmt.format(totals.balance)} 电力`} hint={`${clients.length} 个客户端`} />
+    <div className={`metric-row billing-metrics ${isSuperAdmin ? "" : "community-billing-metrics"}`}>
+      {isSuperAdmin
+        ? <Metric label="当前总余额" value={`${fmt.format(totals.balance)} 电力`} hint={`${clients.length} 个客户端`} />
+        : <PowerBalanceCard balance={totals.balance} threshold={totals.threshold} clientCount={clients.length} />}
       <Metric label="实际扣除" value={fmt.format(number(pick(summary, "chargedUnits", "charged_units")))} hint={`基准 ${fmt.format(number(pick(summary, "baseUnits", "base_units")))}`} />
       <Metric label="AI 用量" value={`${fmt.format(number(pick(summary, "totalTokens", "total_tokens")))} tokens`} hint={`${fmt.format(number(pick(summary, "requestCount", "request_count")))} 次请求`} />
-      <Metric label="账户预警" value={totals.low + totals.frozen} hint={`${totals.low} 个低余额 · ${totals.frozen} 个受限`} />
+      {isSuperAdmin && <Metric label="账户预警" value={totals.low + totals.frozen} hint={`${totals.low} 个低余额 · ${totals.frozen} 个受限`} />}
     </div>
 
     <section className="panel dm-card">
-      <div className="panel-heading"><h3>App Client</h3><span className="muted">充值比例：1 元 = {fmt.format(number(pick(platform, "powerPerCny", "power_per_cny") || 1000))} 电力</span></div>
-      <table className="billing-clients"><thead><tr><th>备注名 / 主体</th><th>AppID</th><th>钱包</th><th>余额</th><th>预警线</th><th>AI 计费</th><th>操作</th></tr></thead>
+      <div className="panel-heading"><h3>{isSuperAdmin ? "App Client" : "社区电力账户"}</h3><span className="muted">充值比例：1 元 = {fmt.format(number(pick(platform, "powerPerCny", "power_per_cny") || 1000))} 电力</span></div>
+      <table className="billing-clients"><thead><tr><th>备注名 / 主体</th>{isSuperAdmin && <th>AppID</th>}<th>钱包</th><th>余额</th><th>预警线</th><th>AI 计费</th>{isSuperAdmin && <th>操作</th>}</tr></thead>
         <tbody>{clients.length ? clients.map((client) => {
           const id = clientId(client); const settings = settingsOf(client); const status = walletStatus(client);
           return <tr key={id} className={String(id) === String(selectedId) ? "selected-row" : ""} onClick={() => setSelectedId(String(id))}>
             <td><div className="title-stack"><strong>{clientName(client)}</strong><span>{clientSubtitle(client)}</span></div></td>
-            <td className="mono">{appidOf(client)}</td>
+            {isSuperAdmin && <td className="mono">{appidOf(client)}</td>}
             <td><span className={`badge badge-${statusTone(status)}`}>{status === "active" ? "正常" : status === "frozen" ? "已冻结" : "已停用"}</span></td>
             <td><strong>{fmt.format(balanceOf(client))}</strong>{thresholdOf(client) > 0 && balanceOf(client) <= thresholdOf(client) && <span className="billing-warning">低余额</span>}</td>
             <td>{fmt.format(thresholdOf(client))}</td>
             <td><div className="title-stack"><strong>{pick(settings, "billingEnabled", "billing_enabled") === false ? "已停用" : (pick(settings, "chargingMode", "charging_mode") === "free" ? "免费" : "预付费")}</strong><span>{pick(settings, "customerBillingFactor", "customer_billing_factor") == null ? "跟随平台倍率" : `独立 ×${pick(settings, "customerBillingFactor", "customer_billing_factor")}`}</span></div></td>
-            <td><div className="actions" onClick={(e) => e.stopPropagation()}>
+            {isSuperAdmin && <td><div className="actions" onClick={(e) => e.stopPropagation()}>
               <button onClick={() => setModal({ type: "adjust", client, mode: "add" })}>增加</button>
               <button onClick={() => setModal({ type: "adjust", client, mode: "subtract" })}>扣减</button>
               <button onClick={() => setModal({ type: "settings", client })}>设置</button>
               <button onClick={() => setModal({ type: "client", client })}>编辑资料</button>
               <button onClick={() => setModal({ type: "wallet", client })}>{status === "active" ? "冻结" : "恢复"}</button>
               <button onClick={() => rotateToken(client)}>只读令牌</button>
-            </div></td>
+            </div></td>}
           </tr>;
-        }) : <tr><td colSpan="7"><div className="empty-state"><strong>暂无 App Client</strong><span>新建客户端后会自动创建钱包和计费设置。</span></div></td></tr>}</tbody>
+        }) : <tr><td colSpan={isSuperAdmin ? "7" : "5"}><div className="empty-state"><strong>暂无电力账户</strong><span>{isSuperAdmin ? "新建客户端后会自动创建钱包和计费设置。" : "当前账号绑定的社区还没有关联 App Client，请联系超级管理员。"}</span></div></td></tr>}</tbody>
       </table>
     </section>
 
@@ -193,6 +203,14 @@ export default function BillingPage({ onError, onToast }) {
 }
 
 function Metric({ label, value, hint }) { return <div className="metric dm-card"><span>{label}</span><strong>{value}</strong><em>{hint}</em></div>; }
+
+function PowerBalanceCard({ balance, threshold, clientCount }) {
+  const ratio = threshold > 0 ? balance / threshold : (balance > 0 ? 5 : 0);
+  const percent = Math.max(4, Math.min(100, Math.round((ratio / 5) * 100)));
+  const tone = ratio <= 1 ? "low" : ratio <= 2 ? "medium" : "healthy";
+  const label = tone === "low" ? "电力不足，请及时充值" : tone === "medium" ? "电力偏低" : "电力充足";
+  return <div className={`metric dm-card power-balance-card power-${tone}`}><span>当前剩余电力</span><strong>{fmt.format(balance)} 电力</strong><div className="power-progress" aria-label={`电力健康度 ${percent}%`}><i style={{ width: `${percent}%` }} /></div><em>{label} · {clientCount} 个账户</em></div>;
+}
 
 function BillingTable({ title, rows, clients, type, page, onPage, onExport }) {
   const [nameFilter, setNameFilter] = useState("");
@@ -227,20 +245,22 @@ function BillingModal({ state, platform, loading, onClose, onSubmit }) {
   const set = (key, value) => setForm((next) => ({ ...next, [key]: value }));
   function submit(e) {
     e.preventDefault();
+    if (state.type === "recharge-contact") return;
     if (state.type === "adjust") { const recharge = form.mode === "add" && form.entryType === "recharge"; return onSubmit("adminAdjustAppClientBalance", { appClientId: id, mode: form.mode, entryType: form.entryType, reason: form.reason, receiptReference: form.receiptReference || undefined, ...(recharge ? { amountCents: Math.round(number(form.amountYuan) * 100), currency: "CNY" } : { units: number(form.units) }), idempotencyKey: form.idempotencyKey }, "余额调整成功"); }
     if (state.type === "settings") return onSubmit("adminUpdateAppClientBillingSettings", { appClientId: id, settings: { ...form, reserveUnits: number(form.reserveUnits), lowBalanceThreshold: number(form.lowBalanceThreshold), customerBillingFactor: form.customerBillingFactor === "" ? null : number(form.customerBillingFactor) } }, "客户端计费设置已保存");
     if (state.type === "platform") { if (!confirm("平台计费设置会影响所有后续充值和 AI 请求，确认保存吗？")) return; return onSubmit("adminUpdatePlatformBillingSettings", { settings: Object.fromEntries(Object.entries(form).map(([k,v]) => [k, ["pricingLabel","note"].includes(k) ? v : number(v)])) }, "平台计费设置已保存"); }
     if (state.type === "client") { const clientPatch = { ...form, ...(id ? { appClientId: id } : {}), communityId: form.communityId ? number(form.communityId) : null, allowedActions: form.allowedActions.split(/[\s,，]+/).filter(Boolean) }; return onSubmit("adminUpsertAppClient", { client: clientPatch }, id ? "客户端备注名已保存" : "App Client 已创建"); }
     return onSubmit("adminSetAppClientWalletStatus", { appClientId: id, status: form.status, reason: form.reason }, form.status === "active" ? "钱包已恢复" : "钱包已冻结");
   }
-  const title = state.type === "adjust" ? `${form.mode === "add" ? "增加" : "扣减"}电力 · ${clientName(client)}` : state.type === "settings" ? `计费设置 · ${clientName(client)}` : state.type === "platform" ? "平台统一计费设置" : state.type === "client" ? (id ? `编辑客户端资料 · ${clientName(client)}` : "新建 App Client") : state.type === "token" ? `计费只读令牌 · ${clientName(client)}` : `钱包状态 · ${clientName(client)}`;
+  const title = state.type === "recharge-contact" ? "电力充值" : state.type === "adjust" ? `${form.mode === "add" ? "增加" : "扣减"}电力 · ${clientName(client)}` : state.type === "settings" ? `计费设置 · ${clientName(client)}` : state.type === "platform" ? "平台统一计费设置" : state.type === "client" ? (id ? `编辑客户端资料 · ${clientName(client)}` : "新建 App Client") : state.type === "token" ? `计费只读令牌 · ${clientName(client)}` : `钱包状态 · ${clientName(client)}`;
   return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal-card dm-card billing-modal" onMouseDown={(e) => e.stopPropagation()}><div className="modal-header"><h3>{title}</h3><button type="button" onClick={onClose}>关闭</button></div><form className="billing-form" onSubmit={submit}>
+    {state.type === "recharge-contact" && <div className="recharge-contact"><span className="recharge-icon">⚡</span><strong>暂时先联系马老师充值</strong><p>完成转账后，马老师会为您的社区电力账户入账。</p><button className="primary-button" type="button" onClick={onClose}>我知道了</button></div>}
     {state.type === "token" && <div className="billing-token"><p>令牌只显示这一次。请保存到对应社区后台的服务器环境变量中，不要放入浏览器或小程序。</p><textarea readOnly value={state.token || "服务端未返回令牌"} /><button type="button" onClick={() => navigator.clipboard?.writeText(state.token || "")}>复制令牌</button></div>}
     {state.type === "adjust" && <><label>方式<select value={form.mode} onChange={(e) => set("mode", e.target.value)}><option value="add">增加</option><option value="subtract">扣减</option><option value="set">设定余额</option></select></label><label>账本类型<select value={form.entryType} onChange={(e) => set("entryType", e.target.value)}><option value="recharge">已收款充值</option><option value="grant">赠送</option><option value="refund">退款/补偿</option><option value="adjustment">人工调整</option></select></label>{form.mode === "add" && form.entryType === "recharge" ? <label>实收人民币（元）<input type="number" min="0.01" step="0.01" required value={form.amountYuan} onChange={(e) => set("amountYuan", e.target.value)} /><small>预计到账 {fmt.format(number(form.amountYuan) * number(pick(platform,"powerPerCny","power_per_cny") || 1000))} 电力</small></label> : <label>电力数量<input type="number" min="0" required value={form.units} onChange={(e) => set("units", e.target.value)} /></label>}<label>原因<textarea required value={form.reason} onChange={(e) => set("reason", e.target.value)} /></label>{form.entryType === "recharge" && <label>收款凭证号<input value={form.receiptReference} onChange={(e) => set("receiptReference", e.target.value)} /></label>}</>}
     {state.type === "settings" && <><label className="check-row"><input type="checkbox" checked={form.billingEnabled} onChange={(e) => set("billingEnabled", e.target.checked)} />启用 AI 供应</label><label>计费方式<select value={form.chargingMode} onChange={(e) => set("chargingMode",e.target.value)}><option value="prepaid">预付费</option><option value="free">免费（仍记录用量）</option></select></label><label>单次预占电力<input type="number" value={form.reserveUnits} onChange={(e) => set("reserveUnits",e.target.value)} /></label><label>低余额预警线<input type="number" value={form.lowBalanceThreshold} onChange={(e) => set("lowBalanceThreshold",e.target.value)} /></label><label>独立倍率（留空跟随平台）<input type="number" step="0.01" value={form.customerBillingFactor} onChange={(e) => set("customerBillingFactor",e.target.value)} /></label><label>备注<textarea value={form.note} onChange={(e) => set("note",e.target.value)} /></label></>}
     {state.type === "platform" && <>{[["powerPerCny","每元兑换电力"],["usdCnyRate","美元兑人民币"],["officialInputUsdPerMillion","官方输入价 / 百万 token（美元）"],["officialOutputUsdPerMillion","官方输出价 / 百万 token（美元）"],["customerBillingFactor","平台计费倍率"]].map(([key,label]) => <label key={key}>{label}<input type="number" step="0.01" value={form[key]} onChange={(e) => set(key,e.target.value)} /></label>)}<label>定价标签<input value={form.pricingLabel} onChange={(e) => set("pricingLabel",e.target.value)} /></label><label>备注<textarea value={form.note} onChange={(e) => set("note",e.target.value)} /></label></>}
     {state.type === "client" && <>{id ? <><label>后台备注名<input required autoFocus maxLength="120" value={form.name} onChange={(e) => set("name",e.target.value)} /></label><p className="immutable-hint">AppID：{form.appid}（固定不变）</p></> : <><label>AppID<input required value={form.appid} onChange={(e) => set("appid",e.target.value)} /></label>{[["name","后台显示名称 / 备注名"],["companyName","公司或主体名称"],["communityId","绑定社区 ID"]].map(([key,label]) => <label key={key}>{label}<input required={key === "name"} value={form[key]} onChange={(e) => set(key,e.target.value)} /></label>)}<label>客户端类型<select value={form.clientType} onChange={(e) => set("clientType",e.target.value)}><option value="wechat_miniprogram">微信小程序</option><option value="web">Web</option><option value="server">服务端</option></select></label><label>状态<select value={form.status} onChange={(e) => set("status",e.target.value)}><option value="active">启用</option><option value="disabled">停用</option></select></label><label>允许的 actions<textarea value={form.allowedActions} onChange={(e) => set("allowedActions",e.target.value)} /></label></>}</>}
     {state.type === "wallet" && <><label>目标状态<select value={form.status} onChange={(e) => set("status",e.target.value)}><option value="active">正常</option><option value="frozen">冻结</option><option value="disabled">停用</option></select></label><label>原因<textarea required value={form.reason} onChange={(e) => set("reason",e.target.value)} /></label></>}
-    {state.type !== "token" && <button className="primary-button" disabled={loading} type="submit">{loading ? "提交中..." : "确认提交"}</button>}
+    {!['token', 'recharge-contact'].includes(state.type) && <button className="primary-button" disabled={loading} type="submit">{loading ? "提交中..." : "确认提交"}</button>}
   </form></div></div>;
 }

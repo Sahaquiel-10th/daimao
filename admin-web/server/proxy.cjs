@@ -1065,6 +1065,102 @@ async function saveCoverAfterBusiness(data, result) {
   return result;
 }
 
+function billingClientCommunityId(client) {
+  return Number(client && (client.communityId ?? client.community_id ?? (client.community && client.community.id))) || 0;
+}
+
+function billingRowClientId(row) {
+  return Number(row && (row.appClientId ?? row.app_client_id ?? row.clientId ?? row.client_id)) || 0;
+}
+
+function sumBillingUsage(rows, camelKey, snakeKey) {
+  return (rows || []).reduce((total, row) => total + Number(row[camelKey] ?? row[snakeKey] ?? 0), 0);
+}
+
+function scopeBillingResult(payload, session) {
+  if (!session || session.role === "super_admin") return payload;
+  const allowedCommunities = new Set((session.communityIds || []).map(Number));
+  const clients = (payload.clients || []).filter((client) => allowedCommunities.has(billingClientCommunityId(client)));
+  const allowedClientIds = new Set(clients.map((client) => Number(client.id ?? client.appClientId ?? client.app_client_id)).filter(Boolean));
+  const usageEvents = (payload.usageEvents || []).filter((row) => allowedClientIds.has(billingRowClientId(row)));
+  const walletLedger = (payload.walletLedger || []).filter((row) => allowedClientIds.has(billingRowClientId(row)));
+  const rechargeOrders = (payload.rechargeOrders || []).filter((row) => allowedClientIds.has(billingRowClientId(row)));
+  return {
+    ...payload,
+    clients,
+    usageEvents,
+    walletLedger,
+    rechargeOrders,
+    usageSummary: {
+      baseUnits: sumBillingUsage(usageEvents, "baseUnits", "base_units"),
+      ratedUnits: sumBillingUsage(usageEvents, "ratedUnits", "rated_units"),
+      savedUnits: sumBillingUsage(usageEvents, "savedUnits", "saved_units"),
+      surchargeUnits: sumBillingUsage(usageEvents, "surchargeUnits", "surcharge_units"),
+      freeUnitsApplied: sumBillingUsage(usageEvents, "freeUnitsApplied", "free_units_applied"),
+      chargedUnits: sumBillingUsage(usageEvents, "chargedUnits", "charged_units"),
+      totalTokens: sumBillingUsage(usageEvents, "totalTokens", "total_tokens"),
+      requestCount: usageEvents.length,
+    },
+  };
+}
+
+function billingTotalPages(payload) {
+  const pagination = (payload && payload.pagination) || {};
+  return Number(pagination.totalPages ?? pagination.total_pages ?? 1) || 1;
+}
+
+async function getCommunityBilling(data, session) {
+  const discoveryData = businessData({ ...data, page: 1, pageSize: 1 });
+  delete discoveryData.appClientId;
+  const discovery = await callBusiness(discoveryData);
+  if (!discovery || !discovery.success) return discovery;
+  const allowedCommunities = new Set((session.communityIds || []).map(Number));
+  const allowedClients = (discovery.clients || []).filter((client) => allowedCommunities.has(billingClientCommunityId(client)));
+  const requestedClientId = Number(data.appClientId || 0);
+  const targets = requestedClientId
+    ? allowedClients.filter((client) => Number(client.id ?? client.appClientId ?? client.app_client_id) === requestedClientId)
+    : allowedClients;
+  if (requestedClientId && !targets.length) {
+    const error = new Error("无权查看这个社区电力账户");
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  const responses = await Promise.all(targets.map((client) => callBusiness(businessData({
+    ...data,
+    appClientId: Number(client.id ?? client.appClientId ?? client.app_client_id),
+  }))));
+  const usageEvents = responses.flatMap((item) => item.usageEvents || []);
+  const walletLedger = responses.flatMap((item) => item.walletLedger || []);
+  const rechargeOrders = responses.flatMap((item) => item.rechargeOrders || []);
+  const platform = discovery.platformBillingSettings || {};
+  return {
+    success: true,
+    clients: targets,
+    platformBillingSettings: {
+      powerPerCny: platform.powerPerCny ?? platform.power_per_cny,
+      pricingLabel: platform.pricingLabel ?? platform.pricing_label,
+    },
+    usageEvents,
+    walletLedger,
+    rechargeOrders,
+    usageSummary: {
+      baseUnits: sumBillingUsage(usageEvents, "baseUnits", "base_units"),
+      ratedUnits: sumBillingUsage(usageEvents, "ratedUnits", "rated_units"),
+      savedUnits: sumBillingUsage(usageEvents, "savedUnits", "saved_units"),
+      surchargeUnits: sumBillingUsage(usageEvents, "surchargeUnits", "surcharge_units"),
+      freeUnitsApplied: sumBillingUsage(usageEvents, "freeUnitsApplied", "free_units_applied"),
+      chargedUnits: sumBillingUsage(usageEvents, "chargedUnits", "charged_units"),
+      totalTokens: sumBillingUsage(usageEvents, "totalTokens", "total_tokens"),
+      requestCount: usageEvents.length,
+    },
+    pagination: {
+      page: Number(data.page || 1),
+      pageSize: Number(data.pageSize || 100),
+      totalPages: Math.max(1, ...responses.map(billingTotalPages)),
+    },
+  };
+}
+
 async function adminProxyAction(data) {
   const billingActions = new Set([
     "adminGetAppClientBilling",
@@ -1075,7 +1171,13 @@ async function adminProxyAction(data) {
     "adminSetAppClientWalletStatus",
     "adminRotateAppClientBillingReadToken",
   ]);
-  if (billingActions.has(data.action)) requireSuperAdmin(data);
+  if (billingActions.has(data.action) && data.action !== "adminGetAppClientBilling") requireSuperAdmin(data);
+  if (data.action === "adminGetAppClientBilling") {
+    await assertAdmin(data);
+    const session = sessionFromData(data);
+    if (session && session.role === "community_admin") return getCommunityBilling(data, session);
+    return callBusiness(businessData(data));
+  }
   if (data.action === "adminList") {
     await assertAdmin(data);
     const session = sessionFromData(data);

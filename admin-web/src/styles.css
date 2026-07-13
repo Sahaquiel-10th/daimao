@@ -1050,6 +1050,20 @@ button:disabled {
 .billing-toolbar h3, .panel-heading h3 { margin: 0; }
 .billing-filters input { width: auto; min-height: 38px; }
 .billing-metrics .metric strong { font-size: clamp(22px, 2.4vw, 34px); }
+.community-billing-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.power-balance-card { position: relative; overflow: hidden; }
+.power-balance-card.power-healthy { background: #d9f2e8; }
+.power-balance-card.power-medium { background: #fff0bd; }
+.power-balance-card.power-low { background: #ffe0d6; }
+.power-progress { height: 13px; overflow: hidden; border: 2px solid #23211f; border-radius: 999px; background: rgba(255,255,255,.75); }
+.power-progress i { display: block; height: 100%; border-right: 2px solid #23211f; background: #42b883; transition: width .25s ease; }
+.power-medium .power-progress i { background: #f0b429; }
+.power-low .power-progress i { background: #df6240; }
+.recharge-button { background: #ffd66b; }
+.recharge-contact { grid-column: 1 / -1; display: grid; justify-items: center; gap: 10px; padding: 26px 18px 22px; text-align: center; }
+.recharge-contact .recharge-icon { display: grid; width: 64px; height: 64px; place-items: center; border: 3px solid #23211f; border-radius: 50%; background: #ffd66b; box-shadow: 4px 4px 0 #23211f; font-size: 30px; }
+.recharge-contact strong { margin-top: 8px; font-size: 24px; }
+.recharge-contact p { margin: 0 0 8px; color: #6f6a63; }
 .billing-clients tbody tr { cursor: pointer; }
 .billing-clients tbody tr:hover, .selected-row { background: #fff6d9; }
 .billing-warning { display: block; color: #b54827; font-size: 11px; font-weight: 900; }
@@ -1133,6 +1147,7 @@ button:disabled {
 
 @media (max-width: 900px) {
   .billing-detail-grid { grid-template-columns: 1fr; }
+  .community-billing-metrics { grid-template-columns: 1fr; }
   .pricing-current-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pricing-columns { grid-template-columns: 1fr; }
   .customer-price-card { grid-template-columns: 1fr 1fr; }
