@@ -243,15 +243,42 @@ CREATE TABLE IF NOT EXISTS project_applications (
   can_offer TEXT NULL,
   related_experience TEXT NULL,
   ai_review_status ENUM('pending','pass','revise','reject') NOT NULL DEFAULT 'pending',
+  ai_match_score TINYINT UNSIGNED NULL,
   ai_review_summary TEXT NULL,
-  status ENUM('draft','pending_secretary_review','pending_owner_review','accepted','rejected','cancelled') NOT NULL DEFAULT 'pending_secretary_review',
+  ai_review_detail_json JSON NULL,
+  admin_review_deadline_at DATETIME NULL,
+  admin_feedback TEXT NULL,
+  admin_decision_by BIGINT UNSIGNED NULL,
+  admin_decision_at DATETIME NULL,
+  status ENUM('draft','pending_secretary_review','pending_admin_review','pending_owner_review','pending_contact_consent','accepted','rejected','cancelled') NOT NULL DEFAULT 'pending_secretary_review',
+  contact_consent_status ENUM('not_requested','pending','accepted','rejected') NOT NULL DEFAULT 'not_requested',
+  contact_consent_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uk_project_application_user (project_id, user_id),
   KEY idx_project_applications_status (project_id, status, created_at),
+  KEY idx_project_applications_admin_queue (status, admin_review_deadline_at, updated_at),
   CONSTRAINT fk_project_app_project FOREIGN KEY (project_id) REFERENCES projects(id),
   CONSTRAINT fk_project_app_user FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS project_application_review_logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  application_id BIGINT UNSIGNED NOT NULL,
+  project_id BIGINT UNSIGNED NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL,
+  decision ENUM('pass','revise','reject','error') NOT NULL,
+  score TINYINT UNSIGNED NULL,
+  threshold_score TINYINT UNSIGNED NOT NULL DEFAULT 60,
+  detail_json JSON NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_application_review_logs_application (application_id, created_at),
+  KEY idx_application_review_logs_decision (decision, score, created_at),
+  CONSTRAINT fk_application_review_log_application FOREIGN KEY (application_id) REFERENCES project_applications(id),
+  CONSTRAINT fk_application_review_log_project FOREIGN KEY (project_id) REFERENCES projects(id),
+  CONSTRAINT fk_application_review_log_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS rag_sources (
