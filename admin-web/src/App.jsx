@@ -31,7 +31,7 @@ const tabs = [
   { key: "pending", label: "待处理", icon: CheckCircle2 },
   { key: "experience", label: "经验", icon: Star, superOnly: true },
   { key: "billing", label: "AI 计费", icon: Zap },
-  { key: "rag", label: "RAG", icon: Search },
+  { key: "rag", label: "索引运维", icon: Search },
   { key: "logs", label: "日志", icon: FileText, superOnly: true },
 ];
 
@@ -104,7 +104,7 @@ function statusLabel(value) {
     admin_interview: "管理员访谈",
     admin_evidence: "管理员证据",
     risk_note: "风险备注",
-    pending_secretary_review: "等待 AI 审核",
+    pending_secretary_review: "等待 AI 初审",
     pending_admin_review: "等待超管审核",
     pending_owner_review: "等待项目主理人审核",
     pending_contact_consent: "等待联系授权",
@@ -200,6 +200,29 @@ function buildPendingItems(data) {
       });
     });
   return items.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()).slice(0, 80);
+}
+
+function compareValue(left, right) {
+  if (typeof left === "number" || typeof right === "number") return Number(left || 0) - Number(right || 0);
+  return String(left || "").localeCompare(String(right || ""), "zh-CN", { numeric: true, sensitivity: "base" });
+}
+
+function sortRows(rows, sort, values) {
+  const getter = values[sort.key];
+  if (!getter) return rows;
+  const direction = sort.direction === "asc" ? 1 : -1;
+  return [...rows].sort((left, right) => compareValue(getter(left), getter(right)) * direction);
+}
+
+function pageRows(rows, page, pageSize = 10) {
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  return { rows: rows.slice((safePage - 1) * pageSize, safePage * pageSize), page: safePage, totalPages };
+}
+
+function billingNumber(value) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function Badge({ children, tone = "default" }) {
@@ -352,6 +375,15 @@ export default function App() {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const [errorNeedsLogin, setErrorNeedsLogin] = useState(false);
+  const [overviewBilling, setOverviewBilling] = useState(null);
+  const [selectedLog, setSelectedLog] = useState(null);
+  const [userPage, setUserPage] = useState(1);
+  const [projectPage, setProjectPage] = useState(1);
+  const [eventPage, setEventPage] = useState(1);
+  const [logPage, setLogPage] = useState(1);
+  const [userSort, setUserSort] = useState({ key: "created", direction: "desc" });
+  const [projectSort, setProjectSort] = useState({ key: "updated", direction: "desc" });
+  const [eventSort, setEventSort] = useState({ key: "time", direction: "desc" });
 
   function showError(err, fallback = "操作失败") {
     const message = (err && err.message) || fallback;
@@ -409,38 +441,78 @@ export default function App() {
 
   const stats = useMemo(() => {
     const users = data?.users || [];
-    const projects = data?.projects || [];
-    const events = data?.events || [];
-    const communities = data?.communities || [];
+    const pendingApplications = (data?.projectApplications || []).filter((item) =>
+      ["pending_secretary_review", "pending_admin_review", "pending_owner_review", "pending_contact_consent"].includes(item.status)
+    ).length;
+    const candidateCount = (data?.evidence || []).filter((item) => item.status === "candidate").length;
+    const pendingIndexes = (data?.ragIndexJobs || []).filter((item) => ["pending", "processing", "failed"].includes(item.status)).length;
+    const summary = overviewBilling?.usageSummary || {};
     return [
+      { label: "待处理申请", value: pendingApplications, hint: candidateCount ? `另有 ${candidateCount} 条候选证据` : "暂无候选证据" },
+      { label: "索引异常 / 等待", value: pendingIndexes, hint: pendingIndexes ? "可到索引运维查看" : "索引队列正常" },
+      { label: "AI 请求", value: billingNumber(summary.requestCount).toLocaleString("zh-CN"), hint: `Token ${billingNumber(summary.totalTokens).toLocaleString("zh-CN")}` },
+      { label: "计费消耗", value: billingNumber(summary.chargedUnits).toLocaleString("zh-CN"), hint: `${overviewBilling?.clients?.length || 0} 个接入应用` },
       { label: "活跃用户", value: users.filter((item) => item.status === "active").length, hint: `${users.length} 总用户` },
-      { label: "认证社区", value: communities.filter((item) => item.status === "active").length, hint: "徽章与称号" },
-      { label: "官方项目", value: projects.filter((item) => item.is_official_recommended).length, hint: "前 5 位展示" },
-      { label: "活动", value: events.filter((item) => item.status === "published").length, hint: `${events.length} 总活动` },
     ];
-  }, [data]);
+  }, [data, overviewBilling]);
 
-  const filteredUsers = (data?.users || []).filter((item) =>
-    [
-      item.display_name,
-      item.openid,
-      item.public_user_code,
-      item.id,
-      item.profile?.name,
-      item.profile?.job,
-      item.referral?.referrer_public_user_code,
-      item.referral?.referrer_display_name,
-    ].some((value) => String(value || "").includes(query))
-  );
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredUsers = (data?.users || []).filter((item) => !normalizedQuery || [
+    searchableUserText(item),
+    item.referral?.referrer_public_user_code,
+    item.referral?.referrer_display_name,
+    ...(item.communities || []).flatMap((entry) => [entry.communityName, entry.badgeName, ...(entry.tags || [])]),
+  ].some((value) => String(value || "").toLowerCase().includes(normalizedQuery)));
   const filteredProjects = (data?.projects || []).filter((item) =>
-    [item.name, item.status, item.visibility, item.stage].some((value) => String(value || "").includes(query))
+    [item.name, item.status, item.visibility, item.stage].some((value) => String(value || "").toLowerCase().includes(normalizedQuery))
   );
   const filteredEvents = (data?.events || []).filter((item) =>
-    [item.title, item.location, item.status].some((value) => String(value || "").includes(query))
+    [item.title, item.location, item.status].some((value) => String(value || "").toLowerCase().includes(normalizedQuery))
   );
   const filteredCommunities = (data?.communities || []).filter((item) =>
-    [item.name, item.badge_name, item.status].some((value) => String(value || "").includes(query))
+    [item.name, item.badge_name, item.status].some((value) => String(value || "").toLowerCase().includes(normalizedQuery))
   );
+  const userView = useMemo(() => {
+    const sorted = sortRows(filteredUsers, userSort, {
+      name: (item) => item.display_name || item.profile?.name,
+      code: (item) => item.public_user_code || item.id,
+      referrer: (item) => item.referral?.referrer_display_name || item.referral?.referrer_public_user_code,
+      community: (item) => (item.communities || []).map((entry) => entry.communityName || entry.badgeName).join(" "),
+      experience: (item) => Number(item.experience_points || 0),
+      status: (item) => item.status,
+      permission: (item) => Number(item.is_admin || 0),
+      created: (item) => new Date(item.created_at || 0).getTime(),
+    });
+    return pageRows(sorted, userPage);
+  }, [filteredUsers, userPage, userSort]);
+  const projectView = useMemo(() => {
+    const sorted = sortRows(filteredProjects, projectSort, {
+      id: (item) => Number(item.id),
+      name: (item) => item.name,
+      community: (item) => communityName(data?.communities, item.community_id),
+      owner: (item) => userName(data?.users, item.creator_user_id),
+      status: (item) => item.status,
+      visibility: (item) => item.visibility,
+      official: (item) => item.is_official_recommended ? officialDisplayOrder(item.official_sort_weight) : 999,
+      watch: (item) => Number(item.star_count || item.watch_count || 0),
+      updated: (item) => new Date(item.updated_at || 0).getTime(),
+    });
+    return pageRows(sorted, projectPage);
+  }, [filteredProjects, projectPage, projectSort, data]);
+  const eventView = useMemo(() => {
+    const sorted = sortRows(filteredEvents, eventSort, {
+      id: (item) => Number(item.id),
+      title: (item) => item.title,
+      community: (item) => communityName(data?.communities, item.community_id),
+      time: (item) => new Date(item.start_time || 0).getTime(),
+      location: (item) => item.location,
+      fee: (item) => Number(item.fee_amount_cents || 0),
+      status: (item) => item.status,
+      capacity: (item) => Number(item.capacity || 0),
+    });
+    return pageRows(sorted, eventPage);
+  }, [filteredEvents, eventPage, eventSort, data]);
+  const logView = useMemo(() => pageRows(data?.adminLogs || [], logPage), [data, logPage]);
   const communityMembers = useMemo(() => {
     if (!selectedCommunity) return [];
     return (data?.users || []).filter((user) =>
@@ -475,6 +547,20 @@ export default function App() {
   useEffect(() => {
     if (activeTab === "pending" && isSuperAdmin) loadApplicationReviews();
   }, [activeTab, isSuperAdmin]);
+
+  useEffect(() => {
+    setUserPage(1);
+    setProjectPage(1);
+    setEventPage(1);
+    setLogPage(1);
+  }, [query, activeTab]);
+
+  useEffect(() => {
+    if (!authed || activeTab !== "overview") return;
+    callAdmin("adminGetAppClientBilling", { page: 1, pageSize: 100 })
+      .then(setOverviewBilling)
+      .catch(() => setOverviewBilling(null));
+  }, [authed, activeTab]);
 
   async function loadUserEvidence(userId) {
     if (!userId) {
@@ -766,7 +852,7 @@ export default function App() {
           <div className="topbar-actions">
             <div className="searchbox">
               <Search size={16} />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索当前视图" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={activeTab === "users" ? "全局搜索全部用户" : "搜索当前视图"} />
             </div>
             <button className="icon-button" onClick={refresh} disabled={loading} title="刷新">
               <RefreshCw size={18} />
@@ -798,13 +884,6 @@ export default function App() {
 
         {activeTab === "overview" && (
           <section className="content-grid">
-            <div className="hero-strip dm-card">
-              <div>
-                <p className="eyebrow">运营驾驶舱</p>
-                <h2>社区、项目、活动和人，都在同一张地图里。</h2>
-              </div>
-              <img src={opcLogo} alt="" />
-            </div>
             <div className="metric-row">
               {stats.map((item) => (
                 <div className="metric dm-card" key={item.label}>
@@ -814,17 +893,16 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <section className="panel dm-card">
-              <h3>官方项目顺序</h3>
-                <ProjectTable
-                  projects={(data?.projects || [])
-                    .filter((item) => item.is_official_recommended)
-                    .sort((a, b) => Number(b.official_sort_weight || 0) - Number(a.official_sort_weight || 0))
-                    .slice(0, 5)}
-                  onEdit={setProjectDraft}
-                  communities={data?.communities || []}
-                  users={data?.users || []}
-                />
+            <section className="panel dm-card overview-actions">
+              <div>
+                <h3>需要你关注</h3>
+                <p className="muted">概览只保留运营信号；具体记录请进入待处理、AI 计费或索引运维。</p>
+              </div>
+              <div className="inline-actions">
+                <button type="button" onClick={() => setActiveTab("pending")}>查看待处理</button>
+                <button type="button" onClick={() => setActiveTab("billing")}>查看计费</button>
+                <button type="button" onClick={() => setActiveTab("rag")}>查看索引</button>
+              </div>
             </section>
           </section>
         )}
@@ -833,7 +911,8 @@ export default function App() {
           <section className="content-grid">
             <section className="panel dm-card">
               <h3>用户资料与社区认证</h3>
-              <UserTable users={filteredUsers} onEdit={selectUser} />
+              <UserTable users={userView.rows} onEdit={selectUser} sort={userSort} onSort={setUserSort} />
+              <TablePager page={userView.page} totalPages={userView.totalPages} total={filteredUsers.length} onPage={setUserPage} noun="位用户" />
             </section>
             {userDraft && (
               <Modal title="用户编辑" onClose={() => { setSelectedUser(null); setUserDraft(null); }}>
@@ -921,9 +1000,14 @@ export default function App() {
                 <h3>社区与徽章</h3>
                 {isSuperAdmin && <button onClick={createCommunity}>新建社区</button>}
               </div>
-              <CommunityTable communities={filteredCommunities} onEdit={selectCommunity} />
+              <CommunityTable
+                communities={filteredCommunities}
+                selectedId={selectedCommunity?.id}
+                onSelect={(community) => { setSelectedCommunity(community); setCommunityDraft(null); }}
+                onEdit={selectCommunity}
+              />
             </section>
-            <section className="community-layout">
+            {selectedCommunity && <section className="community-layout">
               <CommunityMembers
                 community={selectedCommunity}
                 members={communityMembers}
@@ -956,7 +1040,7 @@ export default function App() {
                   })
                 }
               />
-            </section>
+            </section>}
             {evidenceDraft && (
               <Modal title="上传社区成员证据" onClose={() => setEvidenceDraft(null)}>
                 <CommunityEvidenceEditor
@@ -1050,12 +1134,15 @@ export default function App() {
                 <button type="button" onClick={createProjectDraft}>新建项目</button>
               </div>
               <ProjectTable
-                projects={filteredProjects}
+                projects={projectView.rows}
                 onEdit={setProjectDraft}
                 onManage={openProjectManagement}
                 communities={data?.communities || []}
                 users={data?.users || []}
+                sort={projectSort}
+                onSort={setProjectSort}
               />
+              <TablePager page={projectView.page} totalPages={projectView.totalPages} total={filteredProjects.length} onPage={setProjectPage} noun="个项目" />
             </section>
             {projectDraft && (
               <Modal title={projectDraft.id ? "编辑项目" : "新建项目"} onClose={() => setProjectDraft(null)}>
@@ -1107,7 +1194,7 @@ export default function App() {
                 <button type="button" onClick={() => setEventDraft(emptyEvent)}>新建活动</button>
               </div>
               <EventTable
-                events={filteredEvents}
+                events={eventView.rows}
                 onEdit={(item) => setEventDraft(fromEventRow(item))}
                 onConfirmRegistration={(item) => setEventRegistrationDraft({
                   eventId: item.id,
@@ -1118,7 +1205,10 @@ export default function App() {
                   note: "",
                 })}
                 communities={data?.communities || []}
+                sort={eventSort}
+                onSort={setEventSort}
               />
+              <TablePager page={eventView.page} totalPages={eventView.totalPages} total={filteredEvents.length} onPage={setEventPage} noun="场活动" />
             </section>
             {eventDraft && (
               <Modal title={eventDraft.id ? "编辑活动" : "发布活动"} onClose={() => setEventDraft(null)}>
@@ -1166,7 +1256,7 @@ export default function App() {
               <div className="panel-title-row">
                 <div>
                   <h3>项目申请审核</h3>
-                  <p className="muted small-muted">查看申请资料和 AI 审核结果，再决定递交项目主理人、请求联系、拒绝或延长审核。</p>
+                  <p className="muted small-muted">“等待 AI 初审”要先处理 AI 任务；变成“等待超管审核”后，再由人工递交主理人、请求联系、拒绝或延长。</p>
                 </div>
                 {isSuperAdmin && <div className="inline-actions">
                   <button type="button" onClick={loadApplicationReviews} disabled={reviewLoading}>刷新申请</button>
@@ -1185,6 +1275,7 @@ export default function App() {
                 users={data?.users || []}
                 onOpen={openApplicationReview}
                 canReview={isSuperAdmin}
+                onProcessAi={() => run("processProjectApplicationReviews", { limit: 20 }, "AI 初审任务已处理").then((ok) => ok && loadApplicationReviews())}
               />
             </section>
             <section className="panel dm-card">
@@ -1216,6 +1307,7 @@ export default function App() {
                 </button>
               </div>
               <PendingTable items={ragPendingItems} />
+              <p className="operation-note">正常情况下应由云开发定时触发器每 1–5 分钟自动执行；这里的按钮用于立即处理或故障补偿，不需要日常逐条点击。</p>
             </section>
             }
             {applicationReviewDetail && (
@@ -1260,8 +1352,15 @@ export default function App() {
 
         {activeTab === "rag" && (
           <section className="content-grid">
+            <section className="panel dm-card rag-guide">
+              <div>
+                <h3>索引运维是做什么的？</h3>
+                <p className="muted">证据、个人资料等内容要先转成可检索索引，AI 审核才能找到它们。平时只需关注失败或长时间等待的任务；没有异常时无需操作。</p>
+              </div>
+              <button type="button" onClick={() => run("processRagIndexJobs", { limit: 20 }, "已触发索引队列处理")} disabled={loading}>处理等待任务</button>
+            </section>
             <section className="panel dm-card">
-              <h3>证据来源</h3>
+              <h3>已进入索引的内容来源</h3>
               <SimpleTable
                 rows={data?.ragSources || []}
                 columns={[
@@ -1275,7 +1374,7 @@ export default function App() {
               />
             </section>
             <section className="panel dm-card">
-              <h3>索引任务</h3>
+              <h3>索引处理记录</h3>
               <SimpleTable
                 rows={data?.ragIndexJobs || []}
                 columns={[
@@ -1294,8 +1393,12 @@ export default function App() {
           <section className="content-grid">
             <section className="panel dm-card">
               <h3>后台操作日志</h3>
-              <AdminLogTable logs={data?.adminLogs || []} users={data?.users || []} />
+              <AdminLogTable logs={logView.rows} users={data?.users || []} onOpen={setSelectedLog} />
+              <TablePager page={logView.page} totalPages={logView.totalPages} total={(data?.adminLogs || []).length} onPage={setLogPage} noun="条日志" />
             </section>
+            {selectedLog && <Modal title={`日志详情 #${selectedLog.id}`} onClose={() => setSelectedLog(null)} wide>
+              <LogDetail log={selectedLog} users={data?.users || []} />
+            </Modal>}
           </section>
         )}
       </section>
@@ -1303,18 +1406,36 @@ export default function App() {
   );
 }
 
-function UserTable({ users, onEdit }) {
+function SortableTh({ label, sortKey, sort, onSort }) {
+  const active = sort?.key === sortKey;
+  const nextDirection = active && sort.direction === "asc" ? "desc" : "asc";
+  return <th><button type="button" className={`sort-button${active ? " active" : ""}`} onClick={() => onSort({ key: sortKey, direction: nextDirection })}>{label}<span>{active ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}</span></button></th>;
+}
+
+function TablePager({ page, totalPages, total, onPage, noun = "条记录" }) {
+  return (
+    <div className="table-pager">
+      <span>共 {total} {noun} · 第 {page}/{totalPages} 页</span>
+      <div className="inline-actions">
+        <button type="button" disabled={page <= 1} onClick={() => onPage(page - 1)}>上一页</button>
+        <button type="button" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>下一页</button>
+      </div>
+    </div>
+  );
+}
+
+function UserTable({ users, onEdit, sort, onSort }) {
   return (
     <table>
       <thead>
         <tr>
-          <th>用户</th>
-          <th>用户ID</th>
-          <th>引荐人</th>
-          <th>社区徽章</th>
-          <th>经验</th>
-          <th>状态</th>
-          <th>权限</th>
+          <SortableTh label="用户" sortKey="name" sort={sort} onSort={onSort} />
+          <SortableTh label="用户ID" sortKey="code" sort={sort} onSort={onSort} />
+          <SortableTh label="引荐人" sortKey="referrer" sort={sort} onSort={onSort} />
+          <SortableTh label="社区徽章" sortKey="community" sort={sort} onSort={onSort} />
+          <SortableTh label="经验" sortKey="experience" sort={sort} onSort={onSort} />
+          <SortableTh label="状态" sortKey="status" sort={sort} onSort={onSort} />
+          <SortableTh label="权限" sortKey="permission" sort={sort} onSort={onSort} />
           <th>操作</th>
         </tr>
       </thead>
@@ -1651,7 +1772,7 @@ function AdminAccountEditor({ draft, communities, onChange, onSubmit, onDisable 
         <input value={draft.displayName || ""} onChange={(event) => onChange({ ...draft, displayName: event.target.value })} placeholder="例如 OPC 社区管理员" />
       </Field>
       <Field label={draft.id ? "新密码（不改可留空）" : "登录密码"}>
-        <input type="password" value={draft.password || ""} onChange={(event) => onChange({ ...draft, password: event.target.value })} placeholder="至少 10 位" />
+        <input type="password" minLength={6} value={draft.password || ""} onChange={(event) => onChange({ ...draft, password: event.target.value })} placeholder="至少 6 位" />
       </Field>
       <Field label="角色">
         <select value={draft.role || "community_admin"} onChange={(event) => onChange({ ...draft, role: event.target.value })}>
@@ -1685,7 +1806,7 @@ function AdminAccountEditor({ draft, communities, onChange, onSubmit, onDisable 
   );
 }
 
-function CommunityTable({ communities, onEdit }) {
+function CommunityTable({ communities, selectedId, onSelect, onEdit }) {
   return (
     <table>
       <thead>
@@ -1699,7 +1820,7 @@ function CommunityTable({ communities, onEdit }) {
       </thead>
       <tbody>
         {communities.length ? communities.map((community) => (
-          <tr key={community.id}>
+          <tr key={community.id} className={Number(selectedId) === Number(community.id) ? "selected-row" : ""}>
             <td>
               <div className="user-cell">
                 {assetSrc(community.logo_display_url, community.logo_url) ? <img className="avatar square-avatar" src={assetSrc(community.logo_display_url, community.logo_url)} alt="" /> : <span className="avatar square-avatar text-avatar">{firstText(community.name, "社")}</span>}
@@ -1712,7 +1833,7 @@ function CommunityTable({ communities, onEdit }) {
             <td><Badge tone="yellow">{community.badge_name || "-"}</Badge></td>
             <td><Badge tone={community.status === "active" ? "green" : "red"}>{statusLabel(community.status)}</Badge></td>
             <td>{community.sort_weight || 0}</td>
-            <td><button onClick={() => onEdit(community)}>编辑</button></td>
+            <td><div className="inline-actions"><button type="button" onClick={() => onSelect(community)}>查看成员</button><button type="button" onClick={() => onEdit(community)}>编辑</button></div></td>
           </tr>
         )) : (
           <tr><td colSpan="5"><EmptyState title="暂无社区">点击「新建社区」创建第一个社区。</EmptyState></td></tr>
@@ -2308,20 +2429,20 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
   );
 }
 
-function ProjectTable({ projects, onEdit, onManage, communities = [], users = [] }) {
+function ProjectTable({ projects, onEdit, onManage, communities = [], users = [], sort, onSort }) {
   return (
     <table>
       <thead>
         <tr>
-          <th>ID</th>
-          <th>项目</th>
-          <th>社区</th>
-          <th>主理人</th>
-          <th>状态</th>
-          <th>可见性</th>
-          <th>官方顺序</th>
-          <th>围观</th>
-          <th>更新时间</th>
+          <SortableTh label="ID" sortKey="id" sort={sort} onSort={onSort} />
+          <SortableTh label="项目" sortKey="name" sort={sort} onSort={onSort} />
+          <SortableTh label="社区" sortKey="community" sort={sort} onSort={onSort} />
+          <SortableTh label="主理人" sortKey="owner" sort={sort} onSort={onSort} />
+          <SortableTh label="状态" sortKey="status" sort={sort} onSort={onSort} />
+          <SortableTh label="可见性" sortKey="visibility" sort={sort} onSort={onSort} />
+          <SortableTh label="官方顺序" sortKey="official" sort={sort} onSort={onSort} />
+          <SortableTh label="围观" sortKey="watch" sort={sort} onSort={onSort} />
+          <SortableTh label="更新时间" sortKey="updated" sort={sort} onSort={onSort} />
           <th>操作</th>
         </tr>
       </thead>
@@ -2464,6 +2585,7 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], 
           value={officialDisplayOrder(draft.official_sort_weight)}
           onChange={(event) => onChange({ ...draft, official_sort_weight: officialWeightFromOrder(event.target.value) })}
         />
+        <p className="muted small-muted">仅官方推荐项目生效：填写 1–5，数字越小越靠前；1 是第一位。</p>
       </Field>
       <Field label="目标">
         <textarea value={draft.goal || ""} onChange={(event) => onChange({ ...draft, goal: event.target.value })} />
@@ -2476,19 +2598,19 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], 
   );
 }
 
-function EventTable({ events, onEdit, onConfirmRegistration, communities = [] }) {
+function EventTable({ events, onEdit, onConfirmRegistration, communities = [], sort, onSort }) {
   return (
     <table>
       <thead>
         <tr>
-          <th>ID</th>
-          <th>活动</th>
-          <th>社区</th>
-          <th>时间</th>
-          <th>地点</th>
-          <th>报名费</th>
-          <th>状态</th>
-          <th>容量</th>
+          <SortableTh label="ID" sortKey="id" sort={sort} onSort={onSort} />
+          <SortableTh label="活动" sortKey="title" sort={sort} onSort={onSort} />
+          <SortableTh label="社区" sortKey="community" sort={sort} onSort={onSort} />
+          <SortableTh label="时间" sortKey="time" sort={sort} onSort={onSort} />
+          <SortableTh label="地点" sortKey="location" sort={sort} onSort={onSort} />
+          <SortableTh label="报名费" sortKey="fee" sort={sort} onSort={onSort} />
+          <SortableTh label="状态" sortKey="status" sort={sort} onSort={onSort} />
+          <SortableTh label="容量" sortKey="capacity" sort={sort} onSort={onSort} />
           <th>操作</th>
         </tr>
       </thead>
@@ -2553,11 +2675,7 @@ function EventEditor({ draft, onChange, onSubmit, onUpload, communities = [], is
             onChange={(event) => onChange({ ...draft, feeAmount: event.target.value })}
           />
         </Field>
-        <Field label="币种">
-          <select value={draft.feeCurrency || "CNY"} onChange={(event) => onChange({ ...draft, feeCurrency: event.target.value })}>
-            <option value="CNY">CNY 人民币</option>
-          </select>
-        </Field>
+        <p className="muted small-muted">报名费固定按人民币（CNY）记录。</p>
       </div>
       <Field label="活动封面">
         <AssetUploadField
@@ -2651,7 +2769,7 @@ function EventRegistrationConfirm({ draft, onChange, onSubmit }) {
   );
 }
 
-function ProjectApplicationReviewTable({ applications, projects, users, onOpen, canReview }) {
+function ProjectApplicationReviewTable({ applications, projects, users, onOpen, onProcessAi, canReview }) {
   return (
     <table>
       <thead>
@@ -2691,7 +2809,10 @@ function ProjectApplicationReviewTable({ applications, projects, users, onOpen, 
                 </div>
               </td>
               <td>{formatDate(application.created_at)}</td>
-              <td><button type="button" onClick={() => onOpen(application.id)} disabled={!canReview}>查看并审核</button></td>
+              <td><div className="inline-actions">
+                <button type="button" onClick={() => onOpen(application.id)} disabled={!canReview}>{application.status === "pending_secretary_review" ? "查看详情" : "查看并审核"}</button>
+                {application.status === "pending_secretary_review" && <button type="button" onClick={onProcessAi} disabled={!canReview}>执行 AI 初审</button>}
+              </div></td>
             </tr>
           );
         }) : (
@@ -2761,7 +2882,10 @@ function ProjectApplicationReviewDetail({ detail, decision, onDecisionChange, on
         </div>
       </section>}
 
-      <section className="review-block review-decision-block">
+      {application.status === "pending_secretary_review" ? <section className="review-block ai-waiting-block">
+        <h4>下一步：先完成 AI 初审</h4>
+        <p>当前申请还没有进入人工审核阶段。关闭详情后点击“执行 AI 初审”；任务完成并转为“等待超管审核”后，即可人工通过、拒绝或反馈。</p>
+      </section> : <section className="review-block review-decision-block">
         <h4>人工审核决定</h4>
         <Field label="处理方式">
           <select value={decision.decision} onChange={(event) => onDecisionChange({ ...decision, decision: event.target.value })}>
@@ -2775,7 +2899,7 @@ function ProjectApplicationReviewDetail({ detail, decision, onDecisionChange, on
           <textarea value={decision.feedback} onChange={(event) => onDecisionChange({ ...decision, feedback: event.target.value })} placeholder={decision.decision === "reject" ? "请说明拒绝原因，申请人会收到这段反馈。" : "记录人工判断依据或后续说明。"} />
         </Field>
         <button className="primary-button" type="button" onClick={onSubmit} disabled={disabled || (decision.decision === "reject" && !decision.feedback.trim())}>确认提交审核决定</button>
-      </section>
+      </section>}
     </div>
   );
 }
@@ -2920,7 +3044,7 @@ function ExperienceRuleTable({ rules, onSave }) {
   );
 }
 
-function AdminLogTable({ logs, users }) {
+function AdminLogTable({ logs, users, onOpen }) {
   return (
     <table>
       <thead>
@@ -2929,8 +3053,8 @@ function AdminLogTable({ logs, users }) {
           <th>管理员</th>
           <th>动作</th>
           <th>对象</th>
-          <th>详情</th>
           <th>时间</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -2940,14 +3064,31 @@ function AdminLogTable({ logs, users }) {
             <td>{userName(users, log.admin_user_id)}</td>
             <td>{log.action}</td>
             <td>{log.target_type} #{log.target_id || "-"}</td>
-            <td className="muted-cell">{JSON.stringify(log.detail_json || {}).slice(0, 160)}</td>
             <td>{formatDate(log.created_at)}</td>
+            <td><button type="button" onClick={() => onOpen(log)}>查看详情</button></td>
           </tr>
         )) : (
           <tr><td colSpan="6"><EmptyState title="暂无操作日志">后台操作后会记录在这里。</EmptyState></td></tr>
         )}
       </tbody>
     </table>
+  );
+}
+
+function LogDetail({ log, users }) {
+  return (
+    <div className="log-detail">
+      <dl className="review-fields">
+        <div><dt>管理员</dt><dd>{userName(users, log.admin_user_id)}</dd></div>
+        <div><dt>动作</dt><dd>{log.action || "-"}</dd></div>
+        <div><dt>操作对象</dt><dd>{log.target_type || "-"} #{log.target_id || "-"}</dd></div>
+        <div><dt>时间</dt><dd>{formatDate(log.created_at)}</dd></div>
+      </dl>
+      <section className="review-block">
+        <h4>完整详情</h4>
+        <pre>{parseDetail(log.detail_json) || "无额外详情"}</pre>
+      </section>
+    </div>
   );
 }
 

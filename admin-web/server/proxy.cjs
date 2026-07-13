@@ -55,6 +55,32 @@ async function rdbSelect(table, columns = "*", build) {
   return result.data || [];
 }
 
+async function rdbSelectInBatches(table, columns, column, values, build) {
+  const uniqueValues = [...new Set((values || []).filter((value) => value !== undefined && value !== null))];
+  if (!uniqueValues.length) return [];
+  const batches = [];
+  for (let index = 0; index < uniqueValues.length; index += 150) batches.push(uniqueValues.slice(index, index + 150));
+  const rows = await Promise.all(batches.map((batch) => rdbSelect(table, columns, (request) => {
+    let next = request.in(column, batch);
+    if (build) next = build(next);
+    return next.limit(3000);
+  })));
+  return rows.flat();
+}
+
+async function rdbSelectAll(table, columns, orderColumn, { ascending = false, maxRows = 10000 } = {}) {
+  const rows = [];
+  const batchSize = 1000;
+  while (rows.length < maxRows) {
+    const batch = await rdbSelect(table, columns, (request) =>
+      request.order(orderColumn, { ascending }).range(rows.length, Math.min(rows.length + batchSize - 1, maxRows - 1))
+    );
+    rows.push(...batch);
+    if (batch.length < batchSize) break;
+  }
+  return rows;
+}
+
 async function rdbUpdate(table, values, build) {
   let request = getRdb().from(table).update(values);
   if (build) request = build(request);
@@ -133,8 +159,8 @@ function sign(value) {
 
 function hashPassword(password) {
   const raw = String(password || "");
-  if (raw.length < 10) {
-    const error = new Error("密码至少 10 位");
+  if (raw.length < 6) {
+    const error = new Error("密码至少 6 位");
     error.code = "VALIDATION_ERROR";
     throw error;
   }
@@ -525,21 +551,34 @@ function businessData(data) {
 }
 
 async function enrichAdminList(payload) {
+  const [allUsers, allProjects, allEvents, allAdminLogs] = await Promise.all([
+    rdbSelectAll("users", "id,openid,public_user_code,display_name,avatar_url,status,is_admin,experience_points,created_at,updated_at", "created_at").catch(() => []),
+    rdbSelectAll("projects", "*", "updated_at", { maxRows: 5000 }).catch(() => []),
+    rdbSelectAll("official_events", "*", "start_time", { maxRows: 5000 }).catch(() => []),
+    rdbSelectAll("admin_logs", "*", "created_at", { maxRows: 2000 }).catch(() => []),
+  ]);
+  payload = {
+    ...payload,
+    users: allUsers.length ? allUsers : (payload.users || []),
+    projects: allProjects.length ? allProjects.map((item) => ({ ...item, tags: parseJson(item.tags_json, []) })) : (payload.projects || []),
+    events: allEvents.length ? allEvents : (payload.events || []),
+    adminLogs: allAdminLogs.length ? allAdminLogs : (payload.adminLogs || []),
+  };
   const userIds = (payload.users || []).map((item) => Number(item.id)).filter(Boolean);
   const [communities, memberships, profiles, projectMembers, projectRecords, experienceEvents, referrals, experienceRules] = await Promise.all([
     rdbSelect("communities", "*", (request) => request.order("sort_weight", { ascending: false }).limit(300)).catch(() => []),
-    userIds.length ? rdbSelect("community_memberships", "*", (request) => request.in("user_id", userIds).limit(3000)).catch(() => []) : [],
-    userIds.length ? rdbSelect("user_profiles", "*", (request) => request.in("user_id", userIds).limit(3000)).catch(() => []) : [],
-    userIds.length ? rdbSelect("project_members", "*", (request) => request.in("user_id", userIds).limit(3000)).catch(() => []) : [],
-    userIds.length ? rdbSelect("project_records", "id,project_id,uploader_user_id,title,record_type,visibility,ai_process_status,created_at", (request) => request.in("uploader_user_id", userIds).order("created_at", { ascending: false }).limit(500)).catch(() => []) : [],
-    userIds.length ? rdbSelect("user_experience_events", "*", (request) => request.in("user_id", userIds).order("created_at", { ascending: false }).limit(500)).catch(() => []) : [],
-    userIds.length ? rdbSelect("user_referrals", "*", (request) => request.in("referred_user_id", userIds).eq("status", "active").limit(3000)).catch(() => []) : [],
+    rdbSelectInBatches("community_memberships", "*", "user_id", userIds).catch(() => []),
+    rdbSelectInBatches("user_profiles", "*", "user_id", userIds).catch(() => []),
+    rdbSelectInBatches("project_members", "*", "user_id", userIds).catch(() => []),
+    rdbSelectInBatches("project_records", "id,project_id,uploader_user_id,title,record_type,visibility,ai_process_status,created_at", "uploader_user_id", userIds, (request) => request.order("created_at", { ascending: false })).catch(() => []),
+    rdbSelectInBatches("user_experience_events", "*", "user_id", userIds, (request) => request.order("created_at", { ascending: false })).catch(() => []),
+    rdbSelectInBatches("user_referrals", "*", "referred_user_id", userIds, (request) => request.eq("status", "active")).catch(() => []),
     rdbSelect("experience_rules", "*", (request) => request.order("sort_order", { ascending: true }).limit(200)).catch(() => defaultExperienceRules),
   ]);
   const referrerIds = [...new Set(referrals.map((item) => Number(item.referrer_user_id)).filter(Boolean))];
   const [referrerUsers, referrerProfiles] = await Promise.all([
-    referrerIds.length ? rdbSelect("users", "id,openid,public_user_code,display_name,status", (request) => request.in("id", referrerIds).limit(3000)).catch(() => []) : [],
-    referrerIds.length ? rdbSelect("user_profiles", "user_id,name,job,wechat", (request) => request.in("user_id", referrerIds).limit(3000)).catch(() => []) : [],
+    rdbSelectInBatches("users", "id,openid,public_user_code,display_name,status", "id", referrerIds).catch(() => []),
+    rdbSelectInBatches("user_profiles", "user_id,name,job,wechat", "user_id", referrerIds).catch(() => []),
   ]);
   const communityMap = new Map(communities.map((item) => [Number(item.id), item]));
   const profilesByUser = new Map(profiles.map((item) => [Number(item.user_id), { ...item, tags: parseJson(item.tags_json, []), answers: parseJson(item.answers_json, []) }]));
