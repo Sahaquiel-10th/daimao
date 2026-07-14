@@ -691,6 +691,8 @@ function applyAdminScope(payload, session) {
   const projectRecords = (payload.projectRecords || []).filter((item) => allowedProjectIds.has(Number(item.project_id)));
   const projectApplications = (payload.projectApplications || []).filter((item) => allowedProjectIds.has(Number(item.project_id)));
   const events = (payload.events || []).filter((item) => allowed.has(Number(item.community_id)));
+  const allowedEventIds = new Set(events.map((item) => Number(item.id)));
+  const eventRegistrations = (payload.eventRegistrations || []).filter((item) => allowedEventIds.has(Number(item.event_id)));
   const referrals = (payload.referrals || []).filter(
     (item) => allowedUserIds.has(Number(item.referred_user_id)) || allowedUserIds.has(Number(item.referrer_user_id))
   );
@@ -705,6 +707,7 @@ function applyAdminScope(payload, session) {
     projectRecords,
     projectApplications,
     events,
+    eventRegistrations,
     referrals,
     evidence,
     ragSources,
@@ -885,16 +888,18 @@ async function adminRevokeUserCommunity(data) {
 }
 
 async function adminUpdateCommunity(data) {
-  requireSuperAdmin(data);
   const communityId = data.communityId ? id(data.communityId, "communityId") : null;
+  const session = sessionFromData(data);
+  if (!communityId) requireSuperAdmin(data);
+  else requireCommunityAccess(data, communityId);
   const patch = data.patch || {};
   const values = {};
   if (patch.name !== undefined) values.name = text(patch.name, 120);
   if (patch.badgeName !== undefined) values.badge_name = text(patch.badgeName, 40);
   if (patch.description !== undefined) values.description = text(patch.description, 3000);
   if (patch.logoUrl !== undefined) values.logo_url = text(patch.logoUrl, 1000);
-  if (patch.status !== undefined) values.status = ["paused", "archived"].includes(patch.status) ? patch.status : "active";
-  if (patch.sortWeight !== undefined) values.sort_weight = Number(patch.sortWeight || 0);
+  if (session?.role === "super_admin" && patch.status !== undefined) values.status = ["paused", "archived"].includes(patch.status) ? patch.status : "active";
+  if (session?.role === "super_admin" && patch.sortWeight !== undefined) values.sort_weight = Number(patch.sortWeight || 0);
   if (!Object.keys(values).length) return { success: true, saved: false };
   if (communityId) {
     await rdbUpdate("communities", values, (request) => request.eq("id", communityId));

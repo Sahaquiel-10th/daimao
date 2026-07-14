@@ -31,7 +31,7 @@ const tabs = [
   { key: "pending", label: "待处理", icon: CheckCircle2 },
   { key: "experience", label: "经验", icon: Star, superOnly: true },
   { key: "billing", label: "AI 计费", icon: Zap },
-  { key: "rag", label: "索引运维", icon: Search },
+  { key: "rag", label: "索引运维", icon: Search, superOnly: true },
   { key: "logs", label: "日志", icon: FileText, superOnly: true },
 ];
 
@@ -45,6 +45,7 @@ const emptyEvent = {
   status: "published",
   visibility: "public",
   officialSortWeight: 0,
+  isOfficialDisplay: false,
   capacity: "",
   coverUrl: "",
   communityId: "",
@@ -225,6 +226,11 @@ function billingNumber(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function appClientBalance(client) {
+  const wallet = client?.wallet || client?.appClientWallet || {};
+  return billingNumber(wallet.balanceUnits ?? wallet.balance_units ?? wallet.balance ?? client?.balanceUnits ?? client?.balance_units);
+}
+
 function Badge({ children, tone = "default" }) {
   return <span className={`badge badge-${tone}`}>{children}</span>;
 }
@@ -384,6 +390,9 @@ export default function App() {
   const [userSort, setUserSort] = useState({ key: "created", direction: "desc" });
   const [projectSort, setProjectSort] = useState({ key: "updated", direction: "desc" });
   const [eventSort, setEventSort] = useState({ key: "time", direction: "desc" });
+  const [communityMemberQuery, setCommunityMemberQuery] = useState("");
+  const [communityMemberPage, setCommunityMemberPage] = useState(1);
+  const [communityMemberSort, setCommunityMemberSort] = useState({ key: "name", direction: "asc" });
 
   function showError(err, fallback = "操作失败") {
     const message = (err && err.message) || fallback;
@@ -441,6 +450,29 @@ export default function App() {
 
   const stats = useMemo(() => {
     const users = data?.users || [];
+    const projects = data?.projects || [];
+    const events = data?.events || [];
+    const isCommunityAdmin = data?.adminSession?.role === "community_admin";
+    if (isCommunityAdmin) {
+      const now = Date.now();
+      const registrations = (data?.eventRegistrations || []).filter((item) =>
+        ["registered", "approved", "attended"].includes(item.status)
+      );
+      const activeEvents = events.filter((item) => {
+        if (item.status !== "published") return false;
+        const startsAt = new Date(item.start_time).getTime();
+        const endsAt = item.end_time ? new Date(item.end_time).getTime() : startsAt;
+        return Number.isFinite(startsAt) && startsAt <= now && Number.isFinite(endsAt) && endsAt >= now;
+      });
+      const remainingPower = (overviewBilling?.clients || []).reduce((sum, client) => sum + appClientBalance(client), 0);
+      return [
+        { label: "社区成员", value: users.filter((item) => item.status === "active").length, hint: "当前认证成员" },
+        { label: "累计活动报名", value: registrations.length, hint: "已报名 / 已参加" },
+        { label: "进行中活动", value: activeEvents.length, hint: "当前时刻正在进行" },
+        { label: "进行中项目", value: projects.filter((item) => item.status === "active").length, hint: `${projects.length} 个项目` },
+        { label: "AI 电费剩余", value: remainingPower.toLocaleString("zh-CN"), hint: `${overviewBilling?.clients?.length || 0} 个电力账户` },
+      ];
+    }
     const pendingApplications = (data?.projectApplications || []).filter((item) =>
       ["pending_secretary_review", "pending_admin_review", "pending_owner_review", "pending_contact_consent"].includes(item.status)
     ).length;
@@ -509,6 +541,7 @@ export default function App() {
       fee: (item) => Number(item.fee_amount_cents || 0),
       status: (item) => item.status,
       capacity: (item) => Number(item.capacity || 0),
+      official: (item) => Number(item.official_sort_weight || 0),
     });
     return pageRows(sorted, eventPage);
   }, [filteredEvents, eventPage, eventSort, data]);
@@ -519,6 +552,24 @@ export default function App() {
       (user.communities || []).some((item) => Number(item.community_id) === Number(selectedCommunity.id) && item.status === "active")
     );
   }, [data, selectedCommunity]);
+  const filteredCommunityMembers = useMemo(() => {
+    const keyword = communityMemberQuery.trim().toLowerCase();
+    return communityMembers.filter((item) => !keyword || [
+      searchableUserText(item),
+      ...(item.communities || []).flatMap((entry) => [entry.communityName, entry.badgeName, ...(entry.tags || [])]),
+    ].some((value) => String(value || "").toLowerCase().includes(keyword)));
+  }, [communityMembers, communityMemberQuery]);
+  const communityMemberView = useMemo(() => {
+    const sorted = sortRows(filteredCommunityMembers, communityMemberSort, {
+      name: (item) => item.display_name || item.profile?.name,
+      code: (item) => item.public_user_code || item.id,
+      job: (item) => item.profile?.job,
+      tags: (item) => (item.communities || []).flatMap((entry) => entry.tags || []).join(" "),
+      experience: (item) => Number(item.experience_points || 0),
+      status: (item) => item.status,
+    });
+    return pageRows(sorted, communityMemberPage);
+  }, [filteredCommunityMembers, communityMemberPage, communityMemberSort]);
   const selectedUserEvidence = useMemo(() => {
     if (!selectedUser) return [];
     return userEvidence;
@@ -537,6 +588,21 @@ export default function App() {
   }, [data, applicationReviews]);
   const candidateEvidence = useMemo(() => pendingItems.filter((item) => item.kind === "candidateEvidence"), [pendingItems]);
   const ragPendingItems = useMemo(() => pendingItems.filter((item) => item.kind === "rag"), [pendingItems]);
+  const communityFollowUps = useMemo(() => {
+    const registrationsByEvent = new Map();
+    (data?.eventRegistrations || []).forEach((item) => {
+      if (["rejected", "cancelled", "no_show"].includes(item.status)) return;
+      registrationsByEvent.set(Number(item.event_id), (registrationsByEvent.get(Number(item.event_id)) || 0) + 1);
+    });
+    const applicationItems = (data?.projectApplications || [])
+      .filter((item) => item.status === "pending_owner_review")
+      .map((item) => ({ id: `application-${item.id}`, type: "项目申请", title: projectName(data?.projects, item.project_id), detail: `${userName(data?.users, item.user_id)} 正在等待项目主理人确认`, time: item.updated_at || item.created_at }));
+    const sevenDays = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    const eventItems = (data?.events || [])
+      .filter((item) => item.status === "published" && new Date(item.start_time).getTime() >= Date.now() && new Date(item.start_time).getTime() <= sevenDays && !registrationsByEvent.get(Number(item.id)))
+      .map((item) => ({ id: `event-${item.id}`, type: "活动提醒", title: item.title, detail: "7 天内开始，目前还没有报名记录", time: item.start_time }));
+    return [...applicationItems, ...eventItems].sort((a, b) => new Date(a.time || 0) - new Date(b.time || 0));
+  }, [data]);
 
   useEffect(() => {
     if (!visibleTabs.some((tab) => tab.key === activeTab)) {
@@ -547,6 +613,16 @@ export default function App() {
   useEffect(() => {
     if (activeTab === "pending" && isSuperAdmin) loadApplicationReviews();
   }, [activeTab, isSuperAdmin]);
+
+  useEffect(() => {
+    if (isSuperAdmin || !(data?.communities || []).length) return;
+    const stillVisible = (data.communities || []).some((item) => Number(item.id) === Number(selectedCommunity?.id));
+    if (!stillVisible) setSelectedCommunity(data.communities[0]);
+  }, [data, isSuperAdmin, selectedCommunity?.id]);
+
+  useEffect(() => {
+    setCommunityMemberPage(1);
+  }, [communityMemberQuery, selectedCommunity?.id]);
 
   useEffect(() => {
     setUserPage(1);
@@ -827,15 +903,16 @@ export default function App() {
         <nav>
           {visibleTabs.map((tab) => {
             const Icon = tab.icon;
+            const label = !isSuperAdmin && tab.key === "pending" ? "待跟进" : tab.label;
             return (
               <button
                 key={tab.key}
                 className={activeTab === tab.key ? "nav-item active" : "nav-item"}
                 onClick={() => setActiveTab(tab.key)}
-                title={tab.label}
+                title={label}
               >
                 <Icon size={18} />
-                <span>{tab.label}</span>
+                <span>{label}</span>
               </button>
             );
           })}
@@ -846,14 +923,14 @@ export default function App() {
         <header className="topbar">
           <div className="top-title">
             <p className="eyebrow">CloudBase SQL Admin</p>
-            <h2>{tabs.find((item) => item.key === activeTab)?.label}</h2>
+            <h2>{!isSuperAdmin && activeTab === "pending" ? "待跟进" : tabs.find((item) => item.key === activeTab)?.label}</h2>
             {adminSession?.role === "community_admin" && <span className="role-pill">社区管理员</span>}
           </div>
           <div className="topbar-actions">
-            <div className="searchbox">
+            {(isSuperAdmin || activeTab !== "communities") && <div className="searchbox">
               <Search size={16} />
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={activeTab === "users" ? "全局搜索全部用户" : "搜索当前视图"} />
-            </div>
+            </div>}
             <button className="icon-button" onClick={refresh} disabled={loading} title="刷新">
               <RefreshCw size={18} />
             </button>
@@ -895,13 +972,20 @@ export default function App() {
             </div>
             <section className="panel dm-card overview-actions">
               <div>
-                <h3>需要你关注</h3>
-                <p className="muted">概览只保留运营信号；具体记录请进入待处理、AI 计费或索引运维。</p>
+                <h3>{isSuperAdmin ? "需要你关注" : "社区运营入口"}</h3>
+                <p className="muted">{isSuperAdmin ? "概览只保留运营信号；具体记录请进入待处理、AI 计费或索引运维。" : "查看本社区成员、项目、活动和电力余额。"}</p>
               </div>
               <div className="inline-actions">
-                <button type="button" onClick={() => setActiveTab("pending")}>查看待处理</button>
-                <button type="button" onClick={() => setActiveTab("billing")}>查看计费</button>
-                <button type="button" onClick={() => setActiveTab("rag")}>查看索引</button>
+                {isSuperAdmin ? <>
+                  <button type="button" onClick={() => setActiveTab("pending")}>查看待处理</button>
+                  <button type="button" onClick={() => setActiveTab("billing")}>查看计费</button>
+                  <button type="button" onClick={() => setActiveTab("rag")}>查看索引</button>
+                </> : <>
+                  <button type="button" onClick={() => setActiveTab("communities")}>查看成员</button>
+                  <button type="button" onClick={() => setActiveTab("projects")}>查看项目</button>
+                  <button type="button" onClick={() => setActiveTab("events")}>查看活动</button>
+                  <button type="button" onClick={() => setActiveTab("billing")}>查看电力</button>
+                </>}
               </div>
             </section>
           </section>
@@ -995,10 +1079,10 @@ export default function App() {
 
         {activeTab === "communities" && (
           <section className="content-grid">
-            <section className="panel dm-card">
+            {isSuperAdmin ? <><section className="panel dm-card">
               <div className="panel-title-row">
                 <h3>社区与徽章</h3>
-                {isSuperAdmin && <button onClick={createCommunity}>新建社区</button>}
+                <button onClick={createCommunity}>新建社区</button>
               </div>
               <CommunityTable
                 communities={filteredCommunities}
@@ -1040,7 +1124,33 @@ export default function App() {
                   })
                 }
               />
-            </section>}
+            </section>}</> : <CommunityAdminMembersPanel
+              communities={data?.communities || []}
+              community={selectedCommunity}
+              members={communityMemberView.rows}
+              query={communityMemberQuery}
+              onQuery={setCommunityMemberQuery}
+              sort={communityMemberSort}
+              onSort={setCommunityMemberSort}
+              page={communityMemberView.page}
+              totalPages={communityMemberView.totalPages}
+              total={filteredCommunityMembers.length}
+              onPage={setCommunityMemberPage}
+              onCommunity={setSelectedCommunity}
+              onEditCommunity={() => selectedCommunity && setCommunityDraft(communityDraftFrom(selectedCommunity))}
+              onRevoke={(userId) => selectedCommunity && run("adminRevokeUserCommunity", { userId, communityId: selectedCommunity.id }, "成员认证已撤销")}
+              onCreateEvidence={(member) => setEvidenceDraft({
+                userId: member.id,
+                userName: member.display_name || member.profile?.name || member.id,
+                communityId: selectedCommunity?.id,
+                communityName: selectedCommunity?.name,
+                title: `社区证据：${member.display_name || member.profile?.name || member.id}`,
+                evidenceType: "admin_evidence",
+                confidence: 0.9,
+                content: "",
+                file: null,
+              })}
+            />}
             {evidenceDraft && (
               <Modal title="上传社区成员证据" onClose={() => setEvidenceDraft(null)}>
                 <CommunityEvidenceEditor
@@ -1071,7 +1181,7 @@ export default function App() {
               <Modal title={communityDraft.id ? "编辑社区" : "新建社区"} onClose={() => setCommunityDraft(null)}>
                 <CommunityEditor
                   draft={communityDraft}
-                  readOnly={!isSuperAdmin}
+                  isSuperAdmin={isSuperAdmin}
                   onChange={setCommunityDraft}
                   onUpload={(file) => upload("community-logo", file, (fileID, displayUrl) => setCommunityDraft((draft) => ({ ...draft, logoUrl: fileID, logoDisplayUrl: displayUrl })))}
                   onSubmit={() =>
@@ -1141,6 +1251,7 @@ export default function App() {
                 users={data?.users || []}
                 sort={projectSort}
                 onSort={setProjectSort}
+                showOfficial={isSuperAdmin}
               />
               <TablePager page={projectView.page} totalPages={projectView.totalPages} total={filteredProjects.length} onPage={setProjectPage} noun="个项目" />
             </section>
@@ -1252,6 +1363,7 @@ export default function App() {
 
         {activeTab === "pending" && (
           <section className="content-grid">
+            {isSuperAdmin ? <>
             <section className="panel dm-card">
               <div className="panel-title-row">
                 <div>
@@ -1321,6 +1433,7 @@ export default function App() {
                 />
               </Modal>
             )}
+            </> : <CommunityFollowUpPanel items={communityFollowUps} />}
           </section>
         )}
 
@@ -1843,49 +1956,93 @@ function CommunityTable({ communities, selectedId, onSelect, onEdit }) {
   );
 }
 
-function CommunityEditor({ draft, readOnly = false, onChange, onSubmit, onUpload }) {
+function CommunityEditor({ draft, isSuperAdmin = false, onChange, onSubmit, onUpload }) {
   if (!draft) {
     return (
       <aside className="panel editor-panel dm-card">
         <h3>社区编辑</h3>
-        <p className="muted">选择左侧社区后，可以查看社区名称、徽章、logo 和排序。只有超级管理员可以编辑社区主体资料。</p>
+        <p className="muted">可以维护社区名称、介绍和 logo。</p>
       </aside>
     );
   }
   return (
     <aside className="editor-panel embedded-editor">
-      {readOnly && <p className="muted small-muted">社区管理员只能维护本社区成员、活动和证据链；社区主体资料由超级管理员维护。</p>}
       <Field label="社区名称">
-        <input disabled={readOnly} value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
+        <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
       </Field>
       <Field label="徽章名称">
-        <input disabled={readOnly} value={draft.badgeName} onChange={(event) => onChange({ ...draft, badgeName: event.target.value })} />
+        <input value={draft.badgeName} onChange={(event) => onChange({ ...draft, badgeName: event.target.value })} />
       </Field>
       <Field label="社区说明">
-        <textarea disabled={readOnly} value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} />
+        <textarea value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} />
       </Field>
       <Field label="社区 logo">
         <AssetUploadField
           value={draft.logoUrl}
           displayUrl={draft.logoDisplayUrl}
-          disabled={readOnly}
           onUpload={onUpload}
           onClear={() => onChange({ ...draft, logoUrl: "", logoDisplayUrl: "" })}
         />
       </Field>
-      <Field label="状态">
-        <select disabled={readOnly} value={draft.status} onChange={(event) => onChange({ ...draft, status: event.target.value })}>
+      {isSuperAdmin && <Field label="状态">
+        <select value={draft.status} onChange={(event) => onChange({ ...draft, status: event.target.value })}>
           <option value="active">启用</option>
           <option value="paused">暂停</option>
           <option value="archived">归档</option>
         </select>
-      </Field>
-      <Field label="排序权重">
-        <input disabled={readOnly} type="number" value={draft.sortWeight} onChange={(event) => onChange({ ...draft, sortWeight: event.target.value })} />
-      </Field>
-      {!readOnly && <button className="primary-button" onClick={onSubmit}>{draft.id ? "保存社区" : "创建社区"}</button>}
+      </Field>}
+      {isSuperAdmin && <Field label="排序权重">
+        <input type="number" value={draft.sortWeight} onChange={(event) => onChange({ ...draft, sortWeight: event.target.value })} />
+      </Field>}
+      <button className="primary-button" onClick={onSubmit}>{draft.id ? "保存社区" : "创建社区"}</button>
     </aside>
   );
+}
+
+function CommunityAdminMembersPanel({ communities, community, members, query, onQuery, sort, onSort, page, totalPages, total, onPage, onCommunity, onEditCommunity, onRevoke, onCreateEvidence }) {
+  if (!community) return <section className="panel dm-card"><EmptyState title="暂无可管理社区">请让超级管理员先给当前账号绑定社区。</EmptyState></section>;
+  return <>
+    <section className="panel dm-card community-profile-summary">
+      <div className="community-summary-main">
+        {assetSrc(community.logo_display_url, community.logo_url) ? <img className="community-summary-logo" src={assetSrc(community.logo_display_url, community.logo_url)} alt="" /> : <span className="community-summary-logo text-avatar">{firstText(community.name, "社")}</span>}
+        <div className="title-stack"><strong>{community.name}</strong><span>{community.description || "还没有填写社区介绍"}</span></div>
+      </div>
+      <div className="inline-actions">
+        {communities.length > 1 && <select aria-label="切换管理社区" value={community.id} onChange={(event) => onCommunity(communities.find((item) => Number(item.id) === Number(event.target.value)))}>{communities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
+        <button type="button" onClick={onEditCommunity}>编辑社区资料</button>
+      </div>
+    </section>
+    <section className="panel dm-card">
+      <div className="panel-title-row">
+        <div><h3>社区成员</h3><p className="muted small-muted">搜索会覆盖本社区全部成员，再进行每页 10 人的分页。</p></div>
+        <div className="member-global-search"><Search size={16} /><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="全局搜索姓名、用户ID、职业或标签" /></div>
+      </div>
+      <table>
+        <thead><tr>
+          <SortableTh label="成员" sortKey="name" sort={sort} onSort={onSort} />
+          <SortableTh label="用户ID" sortKey="code" sort={sort} onSort={onSort} />
+          <SortableTh label="职业" sortKey="job" sort={sort} onSort={onSort} />
+          <SortableTh label="社区标签" sortKey="tags" sort={sort} onSort={onSort} />
+          <SortableTh label="经验" sortKey="experience" sort={sort} onSort={onSort} />
+          <SortableTh label="状态" sortKey="status" sort={sort} onSort={onSort} />
+          <th>操作</th>
+        </tr></thead>
+        <tbody>{members.length ? members.map((member) => {
+          const membership = (member.communities || []).find((item) => Number(item.community_id) === Number(community.id)) || {};
+          return <tr key={member.id}>
+            <td><div className="user-cell">{assetSrc(member.avatar_display_url, member.avatar_url) ? <img className="avatar" src={assetSrc(member.avatar_display_url, member.avatar_url)} alt="" /> : <span className="avatar text-avatar">{firstText(member.display_name || member.profile?.name)}</span>}<div className="title-stack"><strong>{member.display_name || member.profile?.name || "-"}</strong><span>{member.profile?.wechat || member.openid || ""}</span></div></div></td>
+            <td><code>{member.public_user_code || String(member.id || "").padStart(3, "0")}</code></td>
+            <td>{member.profile?.job || "-"}</td>
+            <td><div className="badge-row">{(membership.tags || []).map((tag) => <Badge tone="yellow" key={`${member.id}-${tag}`}>{tag}</Badge>)}</div></td>
+            <td>{member.experience_points || 0}</td>
+            <td><Badge tone={member.status === "active" ? "green" : "red"}>{statusLabel(member.status)}</Badge></td>
+            <td><div className="inline-actions"><button type="button" onClick={() => onCreateEvidence(member)}>上传证据</button><button type="button" onClick={() => window.confirm("确认撤销这位成员的社区认证？") && onRevoke(member.id)}>撤销认证</button></div></td>
+          </tr>;
+        }) : <tr><td colSpan="7"><EmptyState title="暂无匹配成员">换个关键词试试。</EmptyState></td></tr>}</tbody>
+      </table>
+      <TablePager page={page} totalPages={totalPages} total={total} onPage={onPage} noun="位成员" />
+    </section>
+  </>;
 }
 
 function CommunityMembers({ community, members, onCertify, onRevoke, onCreateEvidence }) {
@@ -2429,7 +2586,7 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
   );
 }
 
-function ProjectTable({ projects, onEdit, onManage, communities = [], users = [], sort, onSort }) {
+function ProjectTable({ projects, onEdit, onManage, communities = [], users = [], sort, onSort, showOfficial = true }) {
   return (
     <table>
       <thead>
@@ -2440,7 +2597,7 @@ function ProjectTable({ projects, onEdit, onManage, communities = [], users = []
           <SortableTh label="主理人" sortKey="owner" sort={sort} onSort={onSort} />
           <SortableTh label="状态" sortKey="status" sort={sort} onSort={onSort} />
           <SortableTh label="可见性" sortKey="visibility" sort={sort} onSort={onSort} />
-          <SortableTh label="官方顺序" sortKey="official" sort={sort} onSort={onSort} />
+          {showOfficial && <SortableTh label="官方顺序" sortKey="official" sort={sort} onSort={onSort} />}
           <SortableTh label="围观" sortKey="watch" sort={sort} onSort={onSort} />
           <SortableTh label="更新时间" sortKey="updated" sort={sort} onSort={onSort} />
           <th>操作</th>
@@ -2460,7 +2617,7 @@ function ProjectTable({ projects, onEdit, onManage, communities = [], users = []
             <td>{userName(users, project.creator_user_id)}</td>
             <td><Badge tone={project.status === "active" ? "green" : "default"}>{statusLabel(project.status)}</Badge></td>
             <td>{project.visibility}</td>
-            <td>{project.is_official_recommended ? <Badge tone="yellow">#{officialDisplayOrder(project.official_sort_weight)}</Badge> : "-"}</td>
+            {showOfficial && <td>{project.is_official_recommended ? <Badge tone="yellow">#{officialDisplayOrder(project.official_sort_weight)}</Badge> : "-"}</td>}
             <td>{project.star_count || project.watch_count || 0}</td>
             <td>{formatDate(project.updated_at)}</td>
             <td>
@@ -2471,7 +2628,7 @@ function ProjectTable({ projects, onEdit, onManage, communities = [], users = []
             </td>
           </tr>
         )) : (
-          <tr><td colSpan="10"><EmptyState title="暂无项目">发布或同步项目后会显示在这里。</EmptyState></td></tr>
+          <tr><td colSpan={showOfficial ? 10 : 9}><EmptyState title="暂无项目">发布或同步项目后会显示在这里。</EmptyState></td></tr>
         )}
       </tbody>
     </table>
@@ -2569,7 +2726,7 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], 
           <option value="private">私有</option>
         </select>
       </Field>
-      <label className="check-row">
+      {isSuperAdmin && <><label className="check-row">
         <input
           type="checkbox"
           checked={!!draft.is_official_recommended}
@@ -2586,7 +2743,7 @@ function ProjectEditor({ draft, onChange, onSubmit, onUpload, communities = [], 
           onChange={(event) => onChange({ ...draft, official_sort_weight: officialWeightFromOrder(event.target.value) })}
         />
         <p className="muted small-muted">仅官方推荐项目生效：填写 1–5，数字越小越靠前；1 是第一位。</p>
-      </Field>
+      </Field></>}
       <Field label="目标">
         <textarea value={draft.goal || ""} onChange={(event) => onChange({ ...draft, goal: event.target.value })} />
       </Field>
@@ -2611,6 +2768,7 @@ function EventTable({ events, onEdit, onConfirmRegistration, communities = [], s
           <SortableTh label="报名费" sortKey="fee" sort={sort} onSort={onSort} />
           <SortableTh label="状态" sortKey="status" sort={sort} onSort={onSort} />
           <SortableTh label="容量" sortKey="capacity" sort={sort} onSort={onSort} />
+          <SortableTh label="官方展示" sortKey="official" sort={sort} onSort={onSort} />
           <th>操作</th>
         </tr>
       </thead>
@@ -2630,6 +2788,7 @@ function EventTable({ events, onEdit, onConfirmRegistration, communities = [], s
             <td>{formatEventFee(event)}</td>
             <td><Badge tone={event.status === "published" ? "green" : "default"}>{statusLabel(event.status)}</Badge></td>
             <td>{event.capacity || "-"}</td>
+            <td>{Number(event.official_sort_weight || 0) > 0 ? <Badge tone="yellow">权重 {event.official_sort_weight}</Badge> : "-"}</td>
             <td>
               <div className="inline-actions">
                 <button type="button" onClick={() => onEdit(event)}>编辑</button>
@@ -2638,7 +2797,7 @@ function EventTable({ events, onEdit, onConfirmRegistration, communities = [], s
             </td>
           </tr>
         )) : (
-          <tr><td colSpan="9"><EmptyState title="暂无活动">创建活动后会显示在这里。</EmptyState></td></tr>
+          <tr><td colSpan="10"><EmptyState title="暂无活动">创建活动后会显示在这里。</EmptyState></td></tr>
         )}
       </tbody>
     </table>
@@ -2660,6 +2819,14 @@ function EventEditor({ draft, onChange, onSubmit, onUpload, communities = [], is
           ))}
         </select>
       </Field>
+      <label className="check-row">
+        <input type="checkbox" checked={!!draft.isOfficialDisplay} onChange={(event) => onChange({ ...draft, isOfficialDisplay: event.target.checked, officialSortWeight: event.target.checked ? Number(draft.officialSortWeight || 100) : 0 })} />
+        官方展示
+      </label>
+      {draft.isOfficialDisplay && <Field label="官方展示顺序权重">
+        <input type="number" min="1" value={draft.officialSortWeight || 100} onChange={(event) => onChange({ ...draft, officialSortWeight: event.target.value })} />
+        <p className="muted small-muted">数字越大越靠前；相同权重时按活动开始时间排序。建议使用 100、200、300 这样的间隔，方便以后插入调整。</p>
+      </Field>}
       <div className="payment-section">
         <div className="payment-section-title">报名与外部支付</div>
         <p className="form-hint">
@@ -2952,6 +3119,18 @@ function PendingTable({ items }) {
   );
 }
 
+function CommunityFollowUpPanel({ items }) {
+  return (
+    <section className="panel dm-card">
+      <div className="panel-title-row"><div><h3>社区运营待跟进</h3><p className="muted small-muted">这里只展示社区管理员能跟进的事项：等待项目主理人确认的申请，以及 7 天内开始但尚无报名记录的活动。AI 初审和候选证据审核由数据中心超管负责。</p></div></div>
+      <table>
+        <thead><tr><th>类型</th><th>事项</th><th>说明</th><th>时间</th></tr></thead>
+        <tbody>{items.length ? items.map((item) => <tr key={item.id}><td><Badge tone="yellow">{item.type}</Badge></td><td><strong>{item.title}</strong></td><td>{item.detail}</td><td>{formatDate(item.time)}</td></tr>) : <tr><td colSpan="4"><EmptyState title="暂无待跟进事项">当前没有需要社区管理员关注的项目申请或活动提醒。</EmptyState></td></tr>}</tbody>
+      </table>
+    </section>
+  );
+}
+
 function ExperienceRuleTable({ rules, onSave }) {
   const [editingKey, setEditingKey] = useState("");
   const [draft, setDraft] = useState(null);
@@ -3123,6 +3302,7 @@ function fromEventRow(row) {
     status: row.status || "published",
     visibility: row.visibility || "public",
     officialSortWeight: row.official_sort_weight || 0,
+    isOfficialDisplay: Number(row.official_sort_weight || 0) > 0,
     capacity: row.capacity || "",
     coverUrl: row.cover_url || "",
     coverDisplayUrl: row.cover_display_url || "",
@@ -3142,7 +3322,7 @@ function toEventPayload(draft) {
     endTime: draft.endTime,
     status: draft.status,
     visibility: draft.visibility,
-    officialSortWeight: Number(draft.officialSortWeight || 0),
+    officialSortWeight: draft.isOfficialDisplay ? Number(draft.officialSortWeight || 100) : 0,
     capacity: draft.capacity ? Number(draft.capacity) : null,
     coverUrl: draft.coverUrl || "",
     communityId: draft.communityId || draft.community_id || null,

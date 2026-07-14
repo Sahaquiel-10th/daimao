@@ -6,6 +6,7 @@ const region = import.meta.env.VITE_CLOUDBASE_REGION || "ap-shanghai";
 const mockEnabled = import.meta.env.VITE_ADMIN_USE_MOCK === "true";
 const apiMode = import.meta.env.VITE_ADMIN_API_MODE || "proxy";
 const proxyUrl = import.meta.env.VITE_ADMIN_API_URL || "/api/admin";
+const mockRole = import.meta.env.VITE_ADMIN_MOCK_ROLE || "super_admin";
 
 let app;
 let signInPromise;
@@ -305,7 +306,7 @@ async function mockCall(action, data) {
     };
     return { success: true, platformBillingSettings: { ...mockState.platformBillingSettings } };
   }
-  if (action === "adminList") return { success: true, adminSession: { role: "super_admin", communityIds: [] }, ...mockState };
+  if (action === "adminList") return { success: true, adminSession: { role: mockRole, communityIds: mockRole === "community_admin" ? [1] : [] }, ...mockState };
   if (action === "adminListProjectApplicationReviews") {
     const statuses = data.statuses || [];
     const applications = mockState.projectApplications
