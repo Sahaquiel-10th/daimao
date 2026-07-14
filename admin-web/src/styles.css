@@ -289,6 +289,11 @@ th {
 .operation-note { margin: 14px 0 0; padding: 11px 13px; border: 2px dashed #b99b54; border-radius: 10px; background: #fff8df; color: #655d4d; font-size: 12px; font-weight: 750; }
 .ai-waiting-block { background: #fff8df; }
 .log-detail pre { max-height: 52vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.community-profile-summary { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.community-summary-main { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.community-summary-logo { display: grid; width: 58px; height: 58px; flex: 0 0 auto; place-items: center; border: 2px solid #23211f; border-radius: 14px; object-fit: cover; font-size: 24px; font-weight: 900; }
+.member-global-search { display: flex; align-items: center; gap: 8px; min-width: min(360px, 100%); padding: 9px 13px; border: 2px solid #23211f; border-radius: 999px; background: #fff; }
+.member-global-search input { min-width: 0; width: 100%; padding: 0; border: 0; outline: 0; }
 
 .icon-button {
   width: 40px;
@@ -1384,4 +1389,6 @@ button:disabled {
   .hero-strip img {
     display: none;
   }
+  .community-profile-summary, .panel-title-row { align-items: stretch; flex-direction: column; }
+  .member-global-search { min-width: 100%; }
 }
