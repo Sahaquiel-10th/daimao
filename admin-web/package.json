@@ -9,7 +9,6 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@cloudbase/js-sdk": "^3.4.8",
     "@cloudbase/node-sdk": "^3.18.3",
     "@vitejs/plugin-react": "^4.3.4",
     "lucide-react": "^0.468.0",

@@ -5,9 +5,10 @@
 ## 架构
 
 - 前端：`admin-web`，Vite + React。
-- 后端：复用云函数 `daimaoBusiness`。
+- 后端：同源后台代理调用云函数 `daimaoBusiness`。
 - 数据：仍通过 CloudBase SQL，不从网页直连数据库。
-- 权限：网页请求携带 `adminWebToken`，云函数校验 `ADMIN_WEB_TOKEN` 后映射到 `users.is_admin=1` 的管理员用户。
+- 权限：浏览器只持有代理签发的短期会话；代理按 `admin_accounts` 和 `admin_account_communities` 校验权限，再在服务端注入 `ADMIN_WEB_TOKEN`。
+- 密钥：`ADMIN_WEB_TOKEN`、供应商 API Key 和 `AI_CONFIG_ENCRYPTION_KEY` 都不能进入浏览器环境变量或接口响应。
 - 审计：用户、项目、活动等写操作会写入 `admin_logs`。
 
 ## 云函数环境变量
@@ -34,15 +35,11 @@ npm run dev
 `.env.local` 示例：
 
 ```text
-VITE_CLOUDBASE_ENV=cloud1-8gocbg40af3862ce
-VITE_CLOUDBASE_FUNCTION=daimaoBusiness
-VITE_CLOUDBASE_REGION=ap-shanghai
-VITE_CLOUDBASE_ACCESS_KEY=可选，CloudBase Publishable Key
-VITE_ADMIN_WEB_TOKEN=与云函数 ADMIN_WEB_TOKEN 相同
+VITE_ADMIN_API_URL=/api/admin
 VITE_ADMIN_USE_MOCK=false
 ```
 
-如果 IP 访问时 CloudBase 匿名登录报 `Failed to fetch`，可以在 CloudBase 控制台的 `环境管理 -> API Key 配置` 创建或复制 `Publishable Key`，在登录页的 `CloudBase Publishable Key` 填入。它是浏览器侧公开访问 Key，不等同于后台访问令牌；真正的管理权限仍由云函数环境变量 `ADMIN_WEB_TOKEN` 校验。
+生产环境必须让 `/api/login`、`/api/admin` 和 `/api/upload` 指向 `server/proxy.cjs`（或等价的可信服务端代理）。不要在 Vite 环境变量、网页源码或 localStorage 中配置 `ADMIN_WEB_TOKEN`。
 
 只看界面可设为：
 
@@ -56,6 +53,8 @@ VITE_ADMIN_USE_MOCK=true
 - 用户列表、启用/禁用、管理员开关
 - 项目列表、状态/可见性/推荐权重/基础信息维护
 - 活动列表、新建活动、编辑活动
+- 平台 / 社区 AI 供应商账户、路由、真实余额与计量
+- 旧本地钱包与外部计费隔离展示（调账仅允许旧本地账户）
 - RAG source 和索引任务查看
 
 ## 与小程序的隔离方式

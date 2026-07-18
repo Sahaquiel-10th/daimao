@@ -226,11 +226,6 @@ function billingNumber(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function appClientBalance(client) {
-  const wallet = client?.wallet || client?.appClientWallet || {};
-  return billingNumber(wallet.balanceUnits ?? wallet.balance_units ?? wallet.balance ?? client?.balanceUnits ?? client?.balance_units);
-}
-
 function Badge({ children, tone = "default" }) {
   return <span className={`badge badge-${tone}`}>{children}</span>;
 }
@@ -464,13 +459,18 @@ export default function App() {
         const endsAt = item.end_time ? new Date(item.end_time).getTime() : startsAt;
         return Number.isFinite(startsAt) && startsAt <= now && Number.isFinite(endsAt) && endsAt >= now;
       });
-      const remainingPower = (overviewBilling?.clients || []).reduce((sum, client) => sum + appClientBalance(client), 0);
+      const billingClients = overviewBilling?.clients || [];
+      const externalAiClients = billingClients.filter((client) => {
+        const settings = client.billingSettings || client.billing_settings || client.settings || {};
+        const source = settings.billingSource || settings.billing_source;
+        return client.balanceSource === "ai_provider" || client.balance_source === "ai_provider" || ["relay", "external"].includes(source);
+      });
       return [
         { label: "社区成员", value: users.filter((item) => item.status === "active").length, hint: "当前认证成员" },
         { label: "累计活动报名", value: registrations.length, hint: "已报名 / 已参加" },
         { label: "进行中活动", value: activeEvents.length, hint: "当前时刻正在进行" },
         { label: "进行中项目", value: projects.filter((item) => item.status === "active").length, hint: `${projects.length} 个项目` },
-        { label: "AI 电费剩余", value: remainingPower.toLocaleString("zh-CN"), hint: `${overviewBilling?.clients?.length || 0} 个电力账户` },
+        { label: "AI 上游线路", value: externalAiClients.length, hint: `${billingClients.length - externalAiClients.length} 个待迁移本地账户` },
       ];
     }
     const pendingApplications = (data?.projectApplications || []).filter((item) =>
@@ -483,7 +483,7 @@ export default function App() {
       { label: "待处理申请", value: pendingApplications, hint: candidateCount ? `另有 ${candidateCount} 条候选证据` : "暂无候选证据" },
       { label: "索引异常 / 等待", value: pendingIndexes, hint: pendingIndexes ? "可到索引运维查看" : "索引队列正常" },
       { label: "AI 请求", value: billingNumber(summary.requestCount).toLocaleString("zh-CN"), hint: `Token ${billingNumber(summary.totalTokens).toLocaleString("zh-CN")}` },
-      { label: "计费消耗", value: billingNumber(summary.chargedUnits).toLocaleString("zh-CN"), hint: `${overviewBilling?.clients?.length || 0} 个接入应用` },
+      { label: "审计计量", value: billingNumber(summary.chargedUnits).toLocaleString("zh-CN"), hint: "不作为上游余额依据" },
       { label: "活跃用户", value: users.filter((item) => item.status === "active").length, hint: `${users.length} 总用户` },
     ];
   }, [data, overviewBilling]);
@@ -973,7 +973,7 @@ export default function App() {
             <section className="panel dm-card overview-actions">
               <div>
                 <h3>{isSuperAdmin ? "需要你关注" : "社区运营入口"}</h3>
-                <p className="muted">{isSuperAdmin ? "概览只保留运营信号；具体记录请进入待处理、AI 计费或索引运维。" : "查看本社区成员、项目、活动和电力余额。"}</p>
+                <p className="muted">{isSuperAdmin ? "概览只保留运营信号；具体记录请进入待处理、AI 计费或索引运维。" : "查看本社区成员、项目、活动和 AI 上游线路。"}</p>
               </div>
               <div className="inline-actions">
                 {isSuperAdmin ? <>
@@ -984,7 +984,7 @@ export default function App() {
                   <button type="button" onClick={() => setActiveTab("communities")}>查看成员</button>
                   <button type="button" onClick={() => setActiveTab("projects")}>查看项目</button>
                   <button type="button" onClick={() => setActiveTab("events")}>查看活动</button>
-                  <button type="button" onClick={() => setActiveTab("billing")}>查看电力</button>
+                  <button type="button" onClick={() => setActiveTab("billing")}>查看 AI 计费</button>
                 </>}
               </div>
             </section>
