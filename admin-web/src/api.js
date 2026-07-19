@@ -1,66 +1,9 @@
-import cloudbase from "@cloudbase/js-sdk";
-
-const env = import.meta.env.VITE_CLOUDBASE_ENV || "cloud1-8gocbg40af3862ce";
-const functionName = import.meta.env.VITE_CLOUDBASE_FUNCTION || "daimaoBusiness";
-const region = import.meta.env.VITE_CLOUDBASE_REGION || "ap-shanghai";
 const mockEnabled = import.meta.env.VITE_ADMIN_USE_MOCK === "true";
-const apiMode = import.meta.env.VITE_ADMIN_API_MODE || "proxy";
 const proxyUrl = import.meta.env.VITE_ADMIN_API_URL || "/api/admin";
 const mockRole = import.meta.env.VITE_ADMIN_MOCK_ROLE || "super_admin";
 
-let app;
-let signInPromise;
-let appAccessKey;
-
-function getApp() {
-  const accessKey = getAccessKey();
-  if (!app || appAccessKey !== accessKey) {
-    appAccessKey = accessKey;
-    app = cloudbase.init(accessKey ? { env, region, accessKey } : { env, region });
-    signInPromise = null;
-  }
-  return app;
-}
-
-async function ensureAuth() {
-  if (getAccessKey()) return;
-  let stage = "检查登录态";
-  try {
-    const auth = getApp().auth({ persistence: "local" });
-    const state = await auth.getLoginState();
-    if (state) return;
-    stage = "匿名登录";
-    if (!signInPromise) signInPromise = signInAnonymously(auth);
-    await signInPromise;
-    stage = "确认登录态";
-    const signedInState = await auth.getLoginState();
-    if (!signedInState) throw new Error("匿名登录后仍未获取到 CloudBase 登录态");
-    if (typeof auth.loginScope === "function") {
-      const scope = await auth.loginScope();
-      if (!scope) throw new Error("匿名登录后 CloudBase loginScope 为空");
-    }
-  } catch (err) {
-    signInPromise = null;
-    err.cloudbaseStage = stage;
-    throw normalizeCloudbaseError(err);
-  }
-}
-
-async function signInAnonymously(auth) {
-  if (typeof auth.signInAnonymously === "function") {
-    const result = await auth.signInAnonymously();
-    if (result && result.error) throw result.error;
-    return result;
-  }
-  return auth.anonymousAuthProvider().signIn();
-}
-
 function getToken() {
   return localStorage.getItem("daimao_admin_session_token") || "";
-}
-
-function getAccessKey() {
-  return localStorage.getItem("daimao_cloudbase_access_key") || import.meta.env.VITE_CLOUDBASE_ACCESS_KEY || "";
 }
 
 export function saveToken(token) {
@@ -68,10 +11,8 @@ export function saveToken(token) {
 }
 
 export function saveAccessKey(accessKey) {
-  localStorage.setItem("daimao_cloudbase_access_key", accessKey || "");
-  app = null;
-  appAccessKey = "";
-  signInPromise = null;
+  // 清理旧版本曾写入浏览器的 CloudBase Publishable Key。
+  localStorage.removeItem("daimao_cloudbase_access_key");
 }
 
 export function hasToken() {
@@ -79,6 +20,12 @@ export function hasToken() {
 }
 
 export async function loginAdmin(username, password) {
+  if (mockEnabled) {
+    if (!String(username || "").trim() || !String(password || "")) throw new Error("请输入账号和密码");
+    const sessionToken = `mock-${mockRole}`;
+    saveToken(sessionToken);
+    return { success: true, sessionToken, role: mockRole, communityIds: mockRole === "community_admin" ? [1] : [] };
+  }
   const response = await fetch("/api/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -104,24 +51,9 @@ export async function callAdmin(action, data = {}) {
   }
   const adminSessionToken = getToken();
   if (!adminSessionToken) throw new Error("请先登录后台");
-  if (apiMode !== "cloudbase") return callAdminProxy(action, { adminSessionToken, ...data });
-  await ensureAuth();
-  try {
-    const result = await getApp().callFunction({
-      name: functionName,
-      data: { action, adminSessionToken, ...data },
-    });
-    const payload = result.result || result;
-    if (!payload || !payload.success) {
-      const error = new Error((payload && payload.message) || "后台服务暂时不可用");
-      error.code = payload && payload.code;
-      throw error;
-    }
-    return payload;
-  } catch (err) {
-    err.cloudbaseStage = "调用云函数";
-    throw normalizeCloudbaseError(err);
-  }
+  // 管理操作一律经过同源后台代理。浏览器会话只用于代理鉴权，
+  // ADMIN_WEB_TOKEN 和供应商 Key 都不能进入浏览器或直达云函数。
+  return callAdminProxy(action, { adminSessionToken, ...data });
 }
 
 export async function uploadAsset(kind, file) {
@@ -181,53 +113,17 @@ async function callAdminProxy(action, data = {}) {
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok || !payload || !payload.success) {
-      const error = new Error((payload && payload.message) || `后台代理服务返回 HTTP ${response.status}`);
-      error.code = payload && payload.code;
+      const code = payload && payload.code;
+      const message = (payload && payload.message) || `后台代理服务返回 HTTP ${response.status}`;
+      const error = new Error(code ? `${code}: ${message}` : message);
+      error.code = code;
+      error.serverMessage = message;
       throw error;
     }
     return payload;
   } catch (err) {
     if (err.code) throw err;
     throw new Error(`后台代理服务连接失败：${err.message || err}`);
-  }
-}
-
-function normalizeCloudbaseError(err) {
-  const rawMessage = errorMessage(err);
-  const context = cloudbaseContext(err);
-  if (/scope|anonymous|auth|login/i.test(rawMessage)) {
-    return new Error(`CloudBase Web 登录未就绪：请检查匿名登录、Web 安全来源和环境 ID。\n${context}\n原始错误：${rawMessage}`);
-  }
-  if (/cors|origin|domain|403|forbidden/i.test(rawMessage)) {
-    return new Error(`CloudBase 拒绝当前网页来源：请把当前 Origin 加入云开发 Web 安全域名/安全来源。\n${context}\n原始错误：${rawMessage}`);
-  }
-  return new Error(`CloudBase 调用失败。\n${context}\n原始错误：${rawMessage || "未知错误"}`);
-}
-
-function cloudbaseContext(err) {
-  const origin = typeof window !== "undefined" && window.location ? window.location.origin : "";
-  const stage = err && err.cloudbaseStage ? `\n当前阶段：${err.cloudbaseStage}` : "";
-  return `当前 Origin：${origin || "-"}\n当前 CloudBase env：${env}\n当前 CloudBase region：${region}\n当前云函数：${functionName}${stage}`;
-}
-
-function errorMessage(err) {
-  if (!err) return "";
-  if (typeof err === "string") return err;
-  if (err.message && typeof err.message === "string") return err.message;
-  if (err.msg && typeof err.msg === "string") return err.msg;
-  if (err.error && typeof err.error === "string") return err.error;
-  if (err.error_description && typeof err.error_description === "string") return err.error_description;
-  if (err.code || err.requestId || err.requestID) {
-    return JSON.stringify({
-      code: err.code,
-      message: err.message || err.msg,
-      requestId: err.requestId || err.requestID,
-    });
-  }
-  try {
-    return JSON.stringify(err);
-  } catch (jsonErr) {
-    return String(err);
   }
 }
 
@@ -280,10 +176,63 @@ const mockState = {
   ragIndexJobs: [
     { id: 40, source_id: 30, job_type: "upsert", status: "completed", created_at: now },
   ],
+  aiProviderAccounts: [
+    { id: 801, accountScope: "platform", communityId: null, name: "数据中心中转站", providerType: "relay", protocol: "openai_chat", baseUrl: "https://s-api.aiarrival.cn/v1", apiKeyLastFour: "1234", rechargeUrl: "https://example.com/recharge", status: "active", updatedAt: now },
+    { id: 802, accountScope: "community", communityId: 1, name: "OPC 社区 AI", providerType: "relay", protocol: "openai_chat", baseUrl: "https://s-api.aiarrival.cn/v1", apiKeyLastFour: "5678", rechargeUrl: "https://example.com/recharge", status: "active", updatedAt: now },
+  ],
+  platformAiSettings: { billingEnabled: true, billingSource: "relay", aiProviderAccountId: 801, defaultModel: "gpt-5-mini", taskModels: { assistant_chat_turn: "gpt-5-mini" }, note: "Mock 平台线路" },
+  billingClients: [
+    { id: 3001, appid: "wx-opc-demo", name: "OPC 社区小程序", communityId: 1, communityName: "OPC 共创营", balanceSource: "ai_provider", billingSettings: { billingEnabled: true, billingSource: "relay", aiProviderAccountId: 802, defaultModel: "gpt-5-mini", taskModels: {} }, wallet: { status: "active", balanceUnits: 120000 } },
+    { id: 3002, appid: "legacy-demo", name: "旧本地测试应用", communityId: 1, communityName: "OPC 共创营", balanceSource: "local_wallet", billingSettings: { billingEnabled: true, billingSource: "local", defaultModel: "legacy-model" }, wallet: { status: "active", balanceUnits: 88000 } },
+  ],
 };
 
 async function mockCall(action, data) {
   await new Promise((resolve) => setTimeout(resolve, 180));
+  const mockExternalBilling = {
+    providerAccount: mockState.aiProviderAccounts.find((item) => item.id === (data.appClientId ? 802 : 801)),
+    account: { balance: 68.52, reserved: 1.25, availableBalance: 67.27, currentMonth: 12.44, totalUsage: 89.31 },
+    usage: { items: [{ id: 1, createdAt: now, model: "gpt-5-mini", inputTokens: 1350, outputTokens: 420, cost: 0.043 }] },
+    readError: null,
+  };
+  if (action === "adminGetPlatformAiSettings") return { success: true, platformAiSettings: { ...mockState.platformAiSettings }, providerAccount: mockState.aiProviderAccounts.find((item) => item.id === mockState.platformAiSettings.aiProviderAccountId), externalBilling: mockExternalBilling, configurationSource: "platform_database" };
+  if (action === "adminUpdatePlatformAiSettings") {
+    mockState.platformAiSettings = { ...mockState.platformAiSettings, ...(data.settings || {}) };
+    return { success: true, platformAiSettings: { ...mockState.platformAiSettings } };
+  }
+  if (action === "adminCheckPlatformAiConnection") return { success: true, connected: true };
+  if (action === "adminListAiProviderAccounts") {
+    return { success: true, accounts: mockState.aiProviderAccounts.filter((item) => item.accountScope === data.accountScope && (!data.communityId || Number(item.communityId) === Number(data.communityId))) };
+  }
+  if (action === "adminUpsertAiProviderAccount") {
+    const account = data.account || {};
+    const existingId = Number(account.id || 0);
+    if (existingId) {
+      mockState.aiProviderAccounts = mockState.aiProviderAccounts.map((item) => item.id === existingId ? { ...item, ...account, apiKeyLastFour: account.apiKey ? account.apiKey.slice(-4) : item.apiKeyLastFour, updatedAt: new Date().toISOString() } : item);
+    } else {
+      mockState.aiProviderAccounts.push({ ...account, id: Date.now(), apiKeyLastFour: String(account.apiKey || "").slice(-4), updatedAt: new Date().toISOString() });
+    }
+    return { success: true, saved: true };
+  }
+  if (action === "adminGetAppClientBilling") {
+    const clients = data.appClientId ? mockState.billingClients.filter((item) => item.id === Number(data.appClientId)) : mockState.billingClients;
+    const selected = clients[0];
+    return {
+      success: true,
+      clients,
+      ...(selected?.balanceSource === "ai_provider" ? { externalBilling: mockExternalBilling } : {}),
+      usageEvents: selected ? [{ id: 11, appClientId: selected.id, action: "assistant_chat_turn", model: "gpt-5-mini", totalTokens: 1770, chargedUnits: 44, createdAt: now }] : [],
+      walletLedger: mockState.billingClients.filter((item) => item.balanceSource === "local_wallet").map((item) => ({ id: item.id, appClientId: item.id, entryType: "adjustment", unitsDelta: 88000, balanceAfter: 88000, reason: "历史余额", createdAt: now })),
+      rechargeOrders: [],
+      usageSummary: { requestCount: 1, totalTokens: 1770, chargedUnits: 44 },
+      pagination: { page: 1, pageSize: 100, totalPages: 1 },
+    };
+  }
+  if (action === "adminUpdateAppClientBillingSettings") {
+    mockState.billingClients = mockState.billingClients.map((item) => item.id === Number(data.appClientId) ? { ...item, balanceSource: ["relay", "external"].includes(data.settings?.billingSource) ? "ai_provider" : "local_wallet", billingSettings: { ...item.billingSettings, ...(data.settings || {}) } } : item);
+    return { success: true, saved: true };
+  }
+  if (action === "adminAdjustAppClientBalance") return { success: true, saved: true };
   if (action === "adminGetPlatformBillingSettings") {
     return { success: true, platformBillingSettings: { ...mockState.platformBillingSettings } };
   }

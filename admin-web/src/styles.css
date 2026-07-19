@@ -1131,6 +1131,25 @@ button:disabled {
 .billing-form small { color: #6f6a63; font-weight: 700; }
 .billing-token { grid-column: 1 / -1; display: grid; gap: 12px; }
 .billing-token textarea { min-height: 120px; font-family: "SFMono-Regular", Consolas, monospace; word-break: break-all; }
+.billing-view-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.ai-billing-page .billing-toolbar { align-items: center; }
+.ai-route-summary { padding: 0; }
+.ai-route-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 0 20px 18px; }
+.ai-route-grid > div { display: grid; gap: 5px; min-width: 0; padding: 14px; border: 1px solid #ece7df; border-radius: 12px; background: #fcfaf6; }
+.ai-route-grid span { color: #777068; font-size: 12px; font-weight: 800; }
+.ai-route-grid strong { overflow-wrap: anywhere; font-size: 15px; }
+.external-billing-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.external-recharge-link { display: inline-flex; width: fit-content; margin-top: 8px; text-decoration: none; }
+.url-cell { max-width: 300px; overflow-wrap: anywhere; white-space: normal; }
+.appclient-route-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0 20px 20px; }
+.appclient-route-card { display: grid; gap: 6px; padding: 14px; border: 1px solid #e3ded5; border-radius: 12px; background: #fff; text-align: left; }
+.appclient-route-card:hover, .appclient-route-card.selected { border-color: #d29c20; background: #fff8e6; }
+.appclient-route-card span, .appclient-route-card em { overflow-wrap: anywhere; color: #746e65; font-size: 12px; font-style: normal; }
+.billing-migration-note, .external-read-error { display: grid; gap: 6px; padding: 16px 20px; border-left: 4px solid #d29c20; }
+.billing-migration-note span, .external-read-error span, .external-read-error em { color: #6f6860; font-style: normal; }
+.external-read-error { border-left-color: #c65136; background: #fff5f1; }
+.modal-wide { width: min(880px, calc(100vw - 28px)); }
+.billing-form textarea.mono { min-height: 160px; }
 .immutable-hint { grid-column: 1 / -1; margin: 0; padding: 10px 12px; border: 2px solid #23211f; border-radius: 10px; background: #d7e8ff; color: #3e5269; font-size: 12px; font-weight: 800; }
 
 .pricing-page { display: grid; gap: 18px; max-width: 1380px; margin: 0 auto; }
@@ -1312,6 +1331,7 @@ button:disabled {
   .review-fields { grid-template-columns: 1fr 1fr; }
   .billing-detail-grid { grid-template-columns: 1fr; }
   .community-billing-metrics { grid-template-columns: 1fr; }
+  .external-billing-metrics, .ai-route-grid, .appclient-route-list { grid-template-columns: 1fr; }
   .pricing-current-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pricing-columns { grid-template-columns: 1fr; }
   .customer-price-card { grid-template-columns: 1fr 1fr; }

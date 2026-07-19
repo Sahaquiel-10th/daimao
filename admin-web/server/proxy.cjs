@@ -333,7 +333,8 @@ async function callBusiness(data) {
 }
 
 function resolveAdminWebToken(data) {
-  if (data && data.adminWebToken) return data.adminWebToken;
+  // 只接受代理自己签发并校验过的后台会话。即使浏览器伪造
+  // adminWebToken 字段，也绝不能把它转发给数据中心。
   if (data && verifySessionToken(data.adminSessionToken) && adminWebToken) return adminWebToken;
   return "";
 }
@@ -1113,6 +1114,61 @@ function billingClientCommunityId(client) {
   return Number(client && (client.communityId ?? client.community_id ?? (client.community && client.community.id))) || 0;
 }
 
+function billingClientId(client) {
+  return Number(client && (client.id ?? client.appClientId ?? client.app_client_id)) || 0;
+}
+
+function providerAccountId(account) {
+  return Number(account && (account.id ?? account.accountId ?? account.account_id)) || 0;
+}
+
+function providerAccountCommunityId(account) {
+  return Number(account && (account.communityId ?? account.community_id)) || 0;
+}
+
+function providerAccountScope(account) {
+  return String(account && (account.accountScope ?? account.account_scope) || "");
+}
+
+function providerAccountsFrom(payload) {
+  if (!payload) return [];
+  return payload.accounts || payload.aiProviderAccounts || payload.providerAccounts || [];
+}
+
+function sanitizeProviderAccount(account) {
+  if (!account || typeof account !== "object") return account;
+  const safe = { ...account };
+  ["apiKey", "api_key", "secret", "encryptedKey", "encrypted_key", "apiKeyEncrypted", "api_key_encrypted"].forEach((key) => delete safe[key]);
+  return safe;
+}
+
+function sanitizeAiPayload(payload) {
+  if (!payload || typeof payload !== "object") return payload;
+  const safe = { ...payload };
+  ["accounts", "aiProviderAccounts", "providerAccounts"].forEach((key) => {
+    if (Array.isArray(safe[key])) safe[key] = safe[key].map(sanitizeProviderAccount);
+  });
+  if (safe.providerAccount) safe.providerAccount = sanitizeProviderAccount(safe.providerAccount);
+  if (safe.externalBilling && typeof safe.externalBilling === "object") {
+    safe.externalBilling = {
+      ...safe.externalBilling,
+      ...(safe.externalBilling.providerAccount ? { providerAccount: sanitizeProviderAccount(safe.externalBilling.providerAccount) } : {}),
+    };
+  }
+  return safe;
+}
+
+function externalBillingSource(client, payload) {
+  const settings = (client && (client.billingSettings || client.billing_settings || client.settings)) || {};
+  const source = String(
+    (client && (client.balanceSource ?? client.balance_source)) ||
+    settings.billingSource || settings.billing_source ||
+    (payload && payload.externalBilling && "external") ||
+    ""
+  );
+  return source === "ai_provider" || source === "relay" || source === "external";
+}
+
 function billingRowClientId(row) {
   return Number(row && (row.appClientId ?? row.app_client_id ?? row.clientId ?? row.client_id)) || 0;
 }
@@ -1176,6 +1232,7 @@ async function getCommunityBilling(data, session) {
   const usageEvents = responses.flatMap((item) => item.usageEvents || []);
   const walletLedger = responses.flatMap((item) => item.walletLedger || []);
   const rechargeOrders = responses.flatMap((item) => item.rechargeOrders || []);
+  const selectedResponse = requestedClientId ? responses[0] : null;
   const platform = discovery.platformBillingSettings || {};
   return {
     success: true,
@@ -1187,6 +1244,7 @@ async function getCommunityBilling(data, session) {
     usageEvents,
     walletLedger,
     rechargeOrders,
+    ...(selectedResponse && selectedResponse.externalBilling ? { externalBilling: selectedResponse.externalBilling } : {}),
     usageSummary: {
       baseUnits: sumBillingUsage(usageEvents, "baseUnits", "base_units"),
       ratedUnits: sumBillingUsage(usageEvents, "ratedUnits", "rated_units"),
@@ -1205,22 +1263,153 @@ async function getCommunityBilling(data, session) {
   };
 }
 
+async function listProviderAccountsForCommunity(data, session) {
+  const requestedCommunityId = Number(data.communityId || 0);
+  const communityIds = requestedCommunityId ? [requestedCommunityId] : (session.communityIds || []);
+  communityIds.forEach((communityId) => requireCommunityAccess(data, communityId));
+  if (!communityIds.length) throw Object.assign(new Error("当前账号没有可管理的社区"), { code: "FORBIDDEN" });
+  const results = await Promise.all(communityIds.map((communityId) => callBusiness(businessData({
+    ...data,
+    accountScope: "community",
+    communityId,
+  }))));
+  const failed = results.find((item) => !item || !item.success);
+  if (failed) return failed;
+  return {
+    success: true,
+    accounts: results.flatMap(providerAccountsFrom).map(sanitizeProviderAccount),
+  };
+}
+
+async function getScopedBillingClient(data, appClientId) {
+  const result = await callBusiness(businessData({
+    action: "adminGetAppClientBilling",
+    appClientId: id(appClientId, "appClientId"),
+    page: 1,
+    pageSize: 1,
+  }));
+  if (!result || !result.success) return { result, client: null };
+  const client = (result.clients || []).find((item) => billingClientId(item) === Number(appClientId)) || (result.clients || [])[0] || result.client || null;
+  if (!client) throw Object.assign(new Error("AppClient 不存在"), { code: "NOT_FOUND" });
+  return { result, client };
+}
+
+async function assertAppClientAccess(data, appClientId) {
+  const session = sessionFromData(data);
+  if (!session) throw Object.assign(new Error("请先登录后台"), { code: "FORBIDDEN" });
+  const scoped = await getScopedBillingClient(data, appClientId);
+  if (scoped.result && scoped.result.success === false) return scoped;
+  requireCommunityAccess(data, billingClientCommunityId(scoped.client));
+  return scoped;
+}
+
+async function assertCommunityProviderAccount(data, accountId, communityId) {
+  const result = await callBusiness(businessData({
+    action: "adminListAiProviderAccounts",
+    accountScope: "community",
+    communityId,
+  }));
+  if (!result || !result.success) return result;
+  const account = providerAccountsFrom(result).find((item) => providerAccountId(item) === Number(accountId));
+  if (!account || providerAccountScope(account) === "platform" || providerAccountCommunityId(account) !== Number(communityId)) {
+    throw Object.assign(new Error("供应商账户与 AppClient 不属于同一社区"), { code: "AI_PROVIDER_COMMUNITY_MISMATCH" });
+  }
+  return account;
+}
+
+async function updateScopedAppClientBilling(data) {
+  const scoped = await assertAppClientAccess(data, data.appClientId);
+  if (scoped.result && scoped.result.success === false) return scoped.result;
+  const settings = { ...(data.settings || {}) };
+  const source = String(settings.billingSource || settings.billing_source || "local");
+  const accountId = Number(settings.aiProviderAccountId ?? settings.ai_provider_account_id ?? 0);
+  if (["relay", "external"].includes(source)) {
+    if (!accountId) throw Object.assign(new Error("请选择供应商账户"), { code: "AI_PROVIDER_ACCOUNT_REQUIRED" });
+    const checked = await assertCommunityProviderAccount(data, accountId, billingClientCommunityId(scoped.client));
+    if (checked && checked.success === false) return checked;
+  }
+  return callBusiness(businessData({ ...data, settings }));
+}
+
+async function upsertScopedProviderAccount(data) {
+  const session = sessionFromData(data);
+  const account = { ...(data.account || {}) };
+  if (session.role === "super_admin" && String(account.accountScope || account.account_scope) === "platform") {
+    if (providerAccountId(account)) {
+      const existing = await callBusiness(businessData({ action: "adminListAiProviderAccounts", accountScope: "platform" }));
+      if (!existing || !existing.success) return existing;
+      if (!providerAccountsFrom(existing).some((item) => providerAccountId(item) === providerAccountId(account) && providerAccountScope(item) === "platform")) {
+        throw Object.assign(new Error("不能把社区账户作为平台账户修改"), { code: "AI_PROVIDER_SCOPE_MISMATCH" });
+      }
+    }
+    delete account.communityId;
+    delete account.community_id;
+    account.accountScope = "platform";
+    return callBusiness(businessData({ ...data, account }));
+  }
+  const communityId = id(account.communityId ?? account.community_id, "communityId");
+  requireCommunityAccess(data, communityId);
+  if (providerAccountId(account)) {
+    const existing = await assertCommunityProviderAccount(data, providerAccountId(account), communityId);
+    if (existing && existing.success === false) return existing;
+  }
+  account.accountScope = "community";
+  account.communityId = communityId;
+  delete account.account_scope;
+  delete account.community_id;
+  return callBusiness(businessData({ ...data, account }));
+}
+
+async function rejectExternalWalletMutation(data) {
+  const scoped = await assertAppClientAccess(data, data.appClientId);
+  if (scoped.result && scoped.result.success === false) return scoped.result;
+  if (externalBillingSource(scoped.client, scoped.result)) {
+    throw Object.assign(new Error("外部账户不能在数据中心充值、调账或冻结钱包"), { code: "EXTERNAL_BILLING_MANAGED" });
+  }
+  requireSuperAdmin(data);
+  return callBusiness(businessData(data));
+}
+
 async function adminProxyAction(data) {
-  const billingActions = new Set([
-    "adminGetAppClientBilling",
-    "adminUpsertAppClient",
-    "adminAdjustAppClientBalance",
-    "adminUpdatePlatformBillingSettings",
-    "adminUpdateAppClientBillingSettings",
-    "adminSetAppClientWalletStatus",
-    "adminRotateAppClientBillingReadToken",
+  const platformAiActions = new Set([
+    "adminGetPlatformAiSettings",
+    "adminUpdatePlatformAiSettings",
+    "adminCheckPlatformAiConnection",
   ]);
-  if (billingActions.has(data.action) && data.action !== "adminGetAppClientBilling") requireSuperAdmin(data);
+  if (platformAiActions.has(data.action)) {
+    requireSuperAdmin(data);
+    return sanitizeAiPayload(await callBusiness(businessData(data)));
+  }
+  if (data.action === "adminListAiProviderAccounts") {
+    await assertAdmin(data);
+    const session = sessionFromData(data);
+    if (session.role === "super_admin") return sanitizeAiPayload(await callBusiness(businessData(data)));
+    if (String(data.accountScope || "community") !== "community") {
+      throw Object.assign(new Error("社区管理员不能查看平台账户"), { code: "FORBIDDEN" });
+    }
+    return listProviderAccountsForCommunity(data, session);
+  }
+  if (data.action === "adminUpsertAiProviderAccount") {
+    await assertAdmin(data);
+    return upsertScopedProviderAccount(data);
+  }
+  if (data.action === "adminUpdateAppClientBillingSettings") {
+    await assertAdmin(data);
+    return updateScopedAppClientBilling(data);
+  }
+  if (["adminAdjustAppClientBalance", "adminSetAppClientWalletStatus"].includes(data.action)) {
+    await assertAdmin(data);
+    return rejectExternalWalletMutation(data);
+  }
+  if (["adminUpsertAppClient", "adminUpdatePlatformBillingSettings", "adminRotateAppClientBillingReadToken"].includes(data.action)) {
+    requireSuperAdmin(data);
+    return callBusiness(businessData(data));
+  }
   if (data.action === "adminGetAppClientBilling") {
     await assertAdmin(data);
     const session = sessionFromData(data);
-    if (session && session.role === "community_admin") return getCommunityBilling(data, session);
-    return callBusiness(businessData(data));
+    if (session && session.role === "community_admin") return sanitizeAiPayload(await getCommunityBilling(data, session));
+    return sanitizeAiPayload(await callBusiness(businessData(data)));
   }
   if (data.action === "adminList") {
     await assertAdmin(data);
