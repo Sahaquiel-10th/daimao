@@ -189,8 +189,10 @@ const mockState = {
 
 async function mockCall(action, data) {
   await new Promise((resolve) => setTimeout(resolve, 180));
+  const selectedClient = data.appClientId ? mockState.billingClients.find((item) => item.id === Number(data.appClientId)) : null;
+  const selectedProviderId = selectedClient?.billingSettings?.aiProviderAccountId || mockState.platformAiSettings.aiProviderAccountId;
   const mockExternalBilling = {
-    providerAccount: mockState.aiProviderAccounts.find((item) => item.id === (data.appClientId ? 802 : 801)),
+    providerAccount: mockState.aiProviderAccounts.find((item) => item.id === selectedProviderId),
     account: { balance: 68.52, reserved: 1.25, availableBalance: 67.27, currentMonth: 12.44, totalUsage: 89.31 },
     usage: { items: [{ id: 1, createdAt: now, model: "gpt-5-mini", inputTokens: 1350, outputTokens: 420, cost: 0.043 }] },
     readError: null,
@@ -213,6 +215,36 @@ async function mockCall(action, data) {
       mockState.aiProviderAccounts.push({ ...account, id: Date.now(), apiKeyLastFour: String(account.apiKey || "").slice(-4), updatedAt: new Date().toISOString() });
     }
     return { success: true, saved: true };
+  }
+  if (action === "adminQuickConnectAi") {
+    const presets = {
+      daimao: { label: "呆猫中转站", providerType: "relay", protocol: "openai_chat", billingSource: "relay", baseUrl: "https://s-api.aiarrival.cn/v1", rechargeUrl: "" },
+      yylx_openai: { label: "YYLX · OpenAI", providerType: "openai_compatible", protocol: "openai_chat", billingSource: "external", baseUrl: "https://app.yylx.io/v1", rechargeUrl: "https://app.yylx.io" },
+      yylx_anthropic: { label: "YYLX · Anthropic", providerType: "anthropic", protocol: "anthropic_messages", billingSource: "external", baseUrl: "https://app.yylx.io/v1", rechargeUrl: "https://app.yylx.io" },
+      custom_openai: { label: "其他 OpenAI 兼容服务", providerType: "openai_compatible", protocol: "openai_chat", billingSource: "external", baseUrl: "", rechargeUrl: "" },
+      custom_anthropic: { label: "其他 Anthropic 服务", providerType: "anthropic", protocol: "anthropic_messages", billingSource: "external", baseUrl: "", rechargeUrl: "" },
+    };
+    const preset = presets[data.providerPreset || "daimao"] || presets.daimao;
+    const targetClient = data.scope === "platform" ? null : mockState.billingClients.find((item) => item.id === Number(data.appClientId));
+    const protocol = (data.providerPreset || "daimao") === "daimao" && /^claude(?:[-_.]|$)/i.test(data.model || "") ? "anthropic_messages" : preset.protocol;
+    const providerAccount = {
+      id: Date.now(),
+      accountScope: data.scope === "platform" ? "platform" : "community",
+      communityId: targetClient?.communityId || null,
+      name: `${targetClient?.name || "平台"} · ${preset.label} · ${data.model}`,
+      providerType: preset.providerType,
+      protocol,
+      baseUrl: data.baseUrl || preset.baseUrl,
+      apiKeyLastFour: String(data.apiKey || "").slice(-4),
+      rechargeUrl: preset.rechargeUrl,
+      status: "active",
+      updatedAt: new Date().toISOString(),
+    };
+    mockState.aiProviderAccounts.push(providerAccount);
+    const settings = { billingEnabled: true, billingSource: preset.billingSource, aiProviderAccountId: providerAccount.id, defaultModel: data.model, taskModels: {}, note: `${preset.label} 快速接入` };
+    if (data.scope === "platform") mockState.platformAiSettings = settings;
+    else mockState.billingClients = mockState.billingClients.map((item) => item.id === Number(data.appClientId) ? { ...item, balanceSource: "ai_provider", billingSettings: settings } : item);
+    return { success: true, providerAccount, connection: { success: true } };
   }
   if (action === "adminGetAppClientBilling") {
     const clients = data.appClientId ? mockState.billingClients.filter((item) => item.id === Number(data.appClientId)) : mockState.billingClients;

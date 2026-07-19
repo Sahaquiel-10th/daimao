@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { callAdmin } from "./api";
 
 const fmt = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 6 });
-const money = new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", maximumFractionDigits: 4 });
 const pick = (item, ...keys) => keys.find((key) => item?.[key] !== undefined) ? item[keys.find((key) => item?.[key] !== undefined)] : undefined;
 const num = (value) => Number(value || 0);
 const clientId = (client) => Number(pick(client, "id", "appClientId", "app_client_id") || 0);
@@ -14,17 +13,18 @@ const walletOf = (client) => client?.wallet || client?.appClientWallet || {};
 const clientName = (client) => pick(client, "name", "clientName", "client_name") || `AppClient #${clientId(client)}`;
 const billingSource = (client) => pick(settingsOf(client), "billingSource", "billing_source") || (pick(client, "balanceSource", "balance_source") === "ai_provider" ? "external" : "local");
 const isExternalClient = (client) => pick(client, "balanceSource", "balance_source") === "ai_provider" || ["relay", "external"].includes(billingSource(client));
-const taskModelsOf = (settings) => pick(settings, "taskModels", "task_models") || {};
 const displayDate = (value) => value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "-";
+
+const providerPresets = {
+  daimao: { label: "我的呆猫中转站（推荐）", baseUrl: "https://s-api.aiarrival.cn/v1", hint: "默认选择。Claude 模型自动走 Anthropic，其余模型走 OpenAI；支持读取真实电力余额和用量。" },
+  yylx_openai: { label: "YYLX · OpenAI 兼容", baseUrl: "https://app.yylx.io/v1", hint: "适合支持 OpenAI Chat 接口的 YYLX Key。" },
+  yylx_anthropic: { label: "YYLX · Anthropic", baseUrl: "https://app.yylx.io/v1", hint: "适合 Claude/Anthropic Key；系统会自动请求 /v1/messages。" },
+  custom_openai: { label: "其他 OpenAI 兼容服务", baseUrl: "", hint: "填写供应商给出的 /v1 Base URL，不要填 /chat/completions。" },
+  custom_anthropic: { label: "其他 Anthropic 服务", baseUrl: "", hint: "填写 messages 端点之前的 Base URL，系统会自动拼接 /messages。" },
+};
 
 function communityName(communities, id) {
   return communities.find((item) => Number(item.id) === Number(id))?.name || `社区 #${id || "-"}`;
-}
-
-function readAccountBalance(externalBilling) {
-  const account = externalBilling?.account || {};
-  const available = pick(account, "availableBalance", "available_balance", "available", "balance");
-  return available === undefined ? null : num(available);
 }
 
 function usageRows(externalBilling) {
@@ -45,347 +45,198 @@ export default function BillingPage({ onError, onToast, isSuperAdmin = true, com
       const payload = await callAdmin("adminGetAppClientBilling", { page: 1, pageSize: 100 });
       setClients(payload.clients || []);
       setBillingPayload(payload);
-    } catch (error) {
-      onError(error, "AppClient 计费信息加载失败");
-    } finally {
-      setLoading(false);
-    }
+    } catch (error) { onError(error, "AI 线路加载失败"); }
+    finally { setLoading(false); }
   }
 
   useEffect(() => { loadClients(); }, []);
 
   return <section className="content-grid billing-page ai-billing-page">
-    <header className="billing-toolbar dm-card">
-      <div>
-        <p className="eyebrow">AI ROUTING & BILLING</p>
-        <h3>AI 路由与计费</h3>
-        <p className="muted">供应商直接计费；数据中心只负责路由、审计与安全转发。</p>
-      </div>
+    <header className="billing-toolbar dm-card simple-ai-header">
+      <div><p className="eyebrow">AI CONNECTION</p><h3>AI 连接与用量</h3><p className="muted">日常接入只需要模型 ID 和 API Key，地址已经默认填好。</p></div>
       <div className="billing-view-tabs" role="tablist">
-        {isSuperAdmin && <button className={mode === "platform" ? "primary-button" : ""} onClick={() => setMode("platform")}>平台 AI</button>}
-        <button className={mode === "community" ? "primary-button" : ""} onClick={() => setMode("community")}>社区 AI</button>
-        <button className={mode === "legacy" ? "primary-button" : ""} onClick={() => setMode("legacy")}>旧本地计费</button>
+        {isSuperAdmin && <button className={mode === "platform" ? "primary-button" : ""} onClick={() => setMode("platform")}>平台线路</button>}
+        <button className={mode === "community" ? "primary-button" : ""} onClick={() => setMode("community")}>社区线路</button>
+        <button className={mode === "legacy" ? "primary-button" : ""} onClick={() => setMode("legacy")}>旧钱包记录</button>
       </div>
     </header>
-
-    {mode === "platform" && isSuperAdmin && <PlatformAiPanel loading={loading} onError={onError} onToast={onToast} />}
-    {mode === "community" && <CommunityAiPanel clients={clients} communities={communities} isSuperAdmin={isSuperAdmin} loading={loading} onReload={loadClients} onError={onError} onToast={onToast} />}
-    {mode === "legacy" && <LegacyBillingPanel clients={clients.filter((item) => !isExternalClient(item))} payload={billingPayload} isSuperAdmin={isSuperAdmin} onReload={loadClients} onError={onError} onToast={onToast} />}
+    {mode === "platform" && isSuperAdmin && <PlatformPanel onError={onError} onToast={onToast} />}
+    {mode === "community" && <CommunityPanel clients={clients} communities={communities} isSuperAdmin={isSuperAdmin} loading={loading} onReload={loadClients} onError={onError} onToast={onToast} />}
+    {mode === "legacy" && <LegacyPanel clients={clients.filter((item) => !isExternalClient(item))} payload={billingPayload} isSuperAdmin={isSuperAdmin} onReload={loadClients} onError={onError} onToast={onToast} />}
   </section>;
 }
 
-function PlatformAiPanel({ onError, onToast }) {
+function PlatformPanel({ onError, onToast }) {
   const [payload, setPayload] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [accountModal, setAccountModal] = useState(null);
-  const [routeModal, setRouteModal] = useState(false);
+  const [connect, setConnect] = useState(false);
 
   async function load() {
     setLoading(true);
     try {
-      const [settingsResult, accountResult] = await Promise.all([
+      const [settingsResult, accountsResult] = await Promise.all([
         callAdmin("adminGetPlatformAiSettings", { page: 1, pageSize: 10 }),
         callAdmin("adminListAiProviderAccounts", { accountScope: "platform" }),
       ]);
       setPayload(settingsResult);
-      setAccounts(accountsOf(accountResult));
-    } catch (error) { onError(error, "平台 AI 配置加载失败"); }
+      setAccounts(accountsOf(accountsResult));
+    } catch (error) { onError(error, "平台 AI 线路加载失败"); }
     finally { setLoading(false); }
   }
-
   useEffect(() => { load(); }, []);
-  const settings = payload?.platformAiSettings || {};
-  const external = payload?.externalBilling || {};
-  const selectedAccount = payload?.providerAccount || accounts.find((item) => accountId(item) === Number(pick(settings, "aiProviderAccountId", "ai_provider_account_id")));
 
-  async function checkConnection() {
-    if (!window.confirm("连通测试会发起一次真实模型请求并产生少量费用，确认继续吗？")) return;
+  const settings = payload?.platformAiSettings || {};
+  const account = payload?.providerAccount || accounts.find((item) => accountId(item) === Number(pick(settings, "aiProviderAccountId", "ai_provider_account_id")));
+  const connected = pick(settings, "billingSource", "billing_source") !== "local" && account;
+
+  async function test() {
+    if (!window.confirm("会发送一次很短的真实请求，产生少量费用。继续测试吗？")) return;
     setLoading(true);
-    try {
-      await callAdmin("adminCheckPlatformAiConnection");
-      onToast({ type: "success", message: "平台 AI 连通测试成功" });
-      await load();
-    } catch (error) { onError(error, "平台 AI 连通测试失败"); }
+    try { await callAdmin("adminCheckPlatformAiConnection"); onToast({ type: "success", message: "平台线路连接成功" }); }
+    catch (error) { onError(error, "平台线路测试失败"); }
     finally { setLoading(false); }
   }
 
   return <>
-    <section className="panel dm-card ai-route-summary">
-      <div className="panel-heading">
-        <div><h3>平台默认路由</h3><span className="muted">仅承接数据中心自身、无来源或无法归属社区的 AI 请求</span></div>
-        <div className="actions"><button onClick={load} disabled={loading}>刷新</button><button onClick={() => setRouteModal(true)} disabled={loading}>编辑路由</button><button className="primary-button" onClick={checkConnection} disabled={loading}>真实连通测试</button></div>
-      </div>
-      <div className="ai-route-grid">
-        <Info label="状态" value={pick(settings, "billingEnabled", "billing_enabled") === false ? "已停用" : "已启用"} />
-        <Info label="线路来源" value={sourceLabel(pick(settings, "billingSource", "billing_source") || "local")} />
-        <Info label="供应商账户" value={selectedAccount?.name || "未绑定"} />
-        <Info label="默认模型" value={pick(settings, "defaultModel", "default_model") || "未配置"} mono />
-        <Info label="配置来源" value={payload?.configurationSource === "environment_fallback" ? "旧环境变量回退" : "平台数据库"} />
-        <Info label="任务模型" value={`${Object.keys(taskModelsOf(settings)).length} 项`} />
-      </div>
-      <p className="operation-note">连通测试会产生一次真实模型请求和少量费用；旧环境变量请保留到平台线路验证稳定之后。</p>
-    </section>
-
-    <ExternalBillingSummary externalBilling={external} providerAccount={selectedAccount} />
-    <ProviderAccountsPanel title="平台供应商账户" accounts={accounts} onCreate={() => setAccountModal({ scope: "platform" })} onEdit={(account) => setAccountModal({ scope: "platform", account })} />
-
-    {external.readError && <ReadError error={external.readError} />}
-    {!!usageRows(external).length && <ExternalUsageTable rows={usageRows(external)} />}
-    {accountModal && <ProviderAccountModal state={accountModal} onClose={() => setAccountModal(null)} onSaved={async () => { setAccountModal(null); await load(); }} onError={onError} onToast={onToast} />}
-    {routeModal && <RouteModal scope="platform" settings={settings} accounts={accounts} onClose={() => setRouteModal(false)} onSaved={async () => { setRouteModal(false); await load(); }} onError={onError} onToast={onToast} />}
+    <ConnectionCard title="平台默认线路" description="供数据中心自身和无法归属社区的请求使用" settings={settings} account={account} connected={connected} loading={loading} onConnect={() => setConnect(true)} onTest={connected ? test : null} />
+    {connected && <BillingFacts externalBilling={payload?.externalBilling} account={account} />}
+    {payload?.externalBilling?.readError && <ReadError error={payload.externalBilling.readError} />}
+    {!!usageRows(payload?.externalBilling).length && <ProviderUsage rows={usageRows(payload.externalBilling)} />}
+    <AdvancedAccounts title="历史供应商连接" accounts={accounts} />
+    {connect && <QuickConnectModal scope="platform" currentSettings={settings} currentAccount={account} onClose={() => setConnect(false)} onSaved={load} onError={onError} onToast={onToast} />}
   </>;
 }
 
-function CommunityAiPanel({ clients, communities, isSuperAdmin, loading, onReload, onError, onToast }) {
+function CommunityPanel({ clients, communities, isSuperAdmin, loading, onReload, onError, onToast }) {
   const initialCommunityId = Number(communities[0]?.id || communityIdOf(clients[0]) || 0);
   const [communityId, setCommunityId] = useState(initialCommunityId);
-  const [accounts, setAccounts] = useState([]);
   const [selectedId, setSelectedId] = useState(0);
   const [detail, setDetail] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [accountModal, setAccountModal] = useState(null);
-  const [routeClient, setRouteClient] = useState(null);
-  const communityClients = useMemo(() => clients.filter((item) => communityIdOf(item) === Number(communityId)), [clients, communityId]);
-  const selectedClient = communityClients.find((item) => clientId(item) === Number(selectedId)) || communityClients[0];
-
-  async function loadAccounts(nextCommunityId = communityId) {
-    if (!nextCommunityId) return setAccounts([]);
-    setBusy(true);
-    try {
-      const result = await callAdmin("adminListAiProviderAccounts", { accountScope: "community", communityId: Number(nextCommunityId) });
-      setAccounts(accountsOf(result));
-    } catch (error) { onError(error, "社区供应商账户加载失败"); }
-    finally { setBusy(false); }
-  }
+  const [connect, setConnect] = useState(false);
+  const communityClients = useMemo(() => clients.filter((item) => communityIdOf(item) === communityId), [clients, communityId]);
+  const selected = communityClients.find((item) => clientId(item) === selectedId) || communityClients[0];
 
   async function loadDetail(id) {
     if (!id) return setDetail(null);
     setBusy(true);
-    try {
-      setDetail(await callAdmin("adminGetAppClientBilling", { appClientId: Number(id), page: 1, pageSize: 10 }));
-    } catch (error) { onError(error, "社区计费详情加载失败"); }
+    try { setDetail(await callAdmin("adminGetAppClientBilling", { appClientId: id, page: 1, pageSize: 10 })); }
+    catch (error) { onError(error, "社区 AI 线路加载失败"); }
     finally { setBusy(false); }
   }
-
-  useEffect(() => { loadAccounts(communityId); }, [communityId]);
   useEffect(() => {
-    const nextId = clientId(selectedClient);
-    setSelectedId(nextId);
-    loadDetail(nextId);
+    const next = clientId(communityClients[0]);
+    setSelectedId(next);
+    loadDetail(next);
   }, [communityId, clients.length]);
   useEffect(() => { if (selectedId) loadDetail(selectedId); }, [selectedId]);
 
-  const external = detail?.externalBilling || {};
-  const effectiveClient = (detail?.clients || []).find((item) => clientId(item) === clientId(selectedClient)) || selectedClient;
-  const selectedAccount = external.providerAccount || accounts.find((item) => accountId(item) === Number(pick(settingsOf(effectiveClient), "aiProviderAccountId", "ai_provider_account_id")));
+  const effectiveClient = (detail?.clients || []).find((item) => clientId(item) === clientId(selected)) || selected;
+  const settings = settingsOf(effectiveClient);
+  const account = detail?.externalBilling?.providerAccount;
+  const connected = effectiveClient && isExternalClient(effectiveClient) && account;
 
   return <>
-    <section className="panel dm-card">
-      <div className="panel-heading">
-        <div><h3>社区 AI 路由</h3><span className="muted">每个社区使用独立上游 Key；AppClient 只能绑定同社区账户</span></div>
-        <div className="actions">
-          <select aria-label="选择社区" value={communityId} onChange={(event) => setCommunityId(Number(event.target.value))} disabled={busy || loading}>
-            {communities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-          <button onClick={async () => { await onReload(); await loadAccounts(); }} disabled={busy || loading}>刷新</button>
-        </div>
-      </div>
-      {!communityId && <Empty title="没有可管理的社区" detail="请先为当前后台账号绑定社区。" />}
-      {!!communityId && <div className="appclient-route-list">
-        {communityClients.length ? communityClients.map((client) => {
-          const settings = settingsOf(client);
-          const source = billingSource(client);
-          return <button key={clientId(client)} className={`appclient-route-card ${clientId(client) === clientId(selectedClient) ? "selected" : ""}`} onClick={() => setSelectedId(clientId(client))}>
-            <strong>{clientName(client)}</strong>
-            <span>{pick(client, "appid", "appId", "app_id") || `#${clientId(client)}`}</span>
-            <em>{sourceLabel(source)} · {pick(settings, "defaultModel", "default_model") || "未配置模型"}</em>
-          </button>;
-        }) : <Empty title="该社区暂无 AppClient" detail={isSuperAdmin ? "请先创建并绑定社区 AppClient。" : "请联系超级管理员创建 AppClient。"} />}
-      </div>}
+    <section className="panel dm-card simple-client-picker">
+      <div className="panel-heading"><div><h3>选择要接入的应用</h3><span className="muted">每个 AppClient 独立选择模型和 Key</span></div><div className="actions"><select aria-label="选择社区" value={communityId} onChange={(event) => setCommunityId(Number(event.target.value))}>{communities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button disabled={busy || loading} onClick={onReload}>刷新</button></div></div>
+      {!communityId ? <Empty title="没有可管理的社区" /> : communityClients.length ? <div className="appclient-route-list">{communityClients.map((client) => <button key={clientId(client)} className={`appclient-route-card ${clientId(client) === clientId(selected) ? "selected" : ""}`} onClick={() => setSelectedId(clientId(client))}><strong>{clientName(client)}</strong><span>{pick(client, "appid", "appId", "app_id") || `#${clientId(client)}`}</span><em>{isExternalClient(client) ? pick(settingsOf(client), "defaultModel", "default_model") || "已接入" : "等待接入"}</em></button>)}</div> : <Empty title="该社区暂无 AppClient" detail={isSuperAdmin ? "请先创建社区 AppClient。" : "请联系超级管理员创建 AppClient。"} />}
     </section>
-
-    {selectedClient && <section className="panel dm-card ai-route-summary">
-      <div className="panel-heading">
-        <div><h3>{clientName(selectedClient)}</h3><span className="muted">{communityName(communities, communityIdOf(selectedClient))}</span></div>
-        <button className="primary-button" onClick={() => setRouteClient(effectiveClient)} disabled={busy}>配置账户与模型</button>
-      </div>
-      <div className="ai-route-grid">
-        <Info label="计费来源" value={sourceLabel(billingSource(effectiveClient))} />
-        <Info label="余额事实来源" value={isExternalClient(effectiveClient) ? "上游供应商" : "数据中心旧钱包"} />
-        <Info label="供应商账户" value={selectedAccount?.name || "未绑定"} />
-        <Info label="默认模型" value={pick(settingsOf(effectiveClient), "defaultModel", "default_model") || "未配置"} mono />
-      </div>
-    </section>}
-
-    {selectedClient && isExternalClient(effectiveClient) && <>
-      <ExternalBillingSummary externalBilling={external} providerAccount={selectedAccount} />
-      {external.readError && <ReadError error={external.readError} />}
-      {!!usageRows(external).length && <ExternalUsageTable rows={usageRows(external)} />}
-      <AuditUsageTable rows={detail?.usageEvents || []} />
+    {selected && <>
+      <ConnectionCard title={clientName(selected)} description={communityName(communities, communityIdOf(selected))} settings={settings} account={account} connected={connected} loading={busy} onConnect={() => setConnect(true)} />
+      {connected && <BillingFacts externalBilling={detail?.externalBilling} account={account} />}
+      {detail?.externalBilling?.readError && <ReadError error={detail.externalBilling.readError} />}
+      {!!usageRows(detail?.externalBilling).length && <ProviderUsage rows={usageRows(detail.externalBilling)} />}
+      {connected && <AuditUsage rows={detail?.usageEvents || []} />}
+      {!connected && <div className="billing-migration-note dm-card"><strong>还没有接入中转站</strong><span>点击“立即接入”，通常只需填写模型 ID 和 API Key。</span></div>}
+      {connect && <QuickConnectModal scope="community" appClient={selected} currentSettings={settings} currentAccount={account} onClose={() => setConnect(false)} onSaved={async () => { await onReload(); await loadDetail(clientId(selected)); }} onError={onError} onToast={onToast} />}
     </>}
-    {selectedClient && !isExternalClient(effectiveClient) && <div className="billing-migration-note dm-card"><strong>此 AppClient 仍使用旧本地钱包</strong><span>余额和历史流水请到“旧本地计费”查看；迁移时为它选择社区供应商账户和模型。</span></div>}
-
-    {!!communityId && <ProviderAccountsPanel title={`${communityName(communities, communityId)} · 供应商账户`} accounts={accounts} onCreate={() => setAccountModal({ scope: "community", communityId })} onEdit={(account) => setAccountModal({ scope: "community", communityId, account })} />}
-    {accountModal && <ProviderAccountModal state={accountModal} onClose={() => setAccountModal(null)} onSaved={async () => { setAccountModal(null); await loadAccounts(); }} onError={onError} onToast={onToast} />}
-    {routeClient && <RouteModal scope="community" client={routeClient} settings={settingsOf(routeClient)} accounts={accounts} onClose={() => setRouteClient(null)} onSaved={async () => { setRouteClient(null); await onReload(); await loadDetail(clientId(routeClient)); }} onError={onError} onToast={onToast} />}
   </>;
 }
 
-function ExternalBillingSummary({ externalBilling = {}, providerAccount }) {
-  const account = externalBilling.account || {};
-  const balance = readAccountBalance(externalBilling);
-  const total = pick(account, "balance", "totalBalance", "total_balance");
-  const monthly = pick(account, "currentMonth", "current_month", "monthUsage", "month_usage");
-  const cumulative = pick(account, "totalUsage", "total_usage", "used");
-  const rechargeUrl = externalBilling?.providerAccount?.rechargeUrl || externalBilling?.providerAccount?.recharge_url || providerAccount?.rechargeUrl || providerAccount?.recharge_url;
-  return <div className="metric-row billing-metrics external-billing-metrics">
-    <Metric label="上游可用余额" value={balance === null ? "暂不可读" : money.format(balance)} hint="以供应商返回为准" />
-    <Metric label="上游总余额" value={total === undefined ? "-" : money.format(num(total))} hint={total === undefined ? "该供应商未返回汇总" : `预留 ${fmt.format(num(pick(account, "reserved", "reservedBalance", "reserved_balance")))}`} />
-    <Metric label="本月用量" value={monthly === undefined ? "-" : fmt.format(num(monthly))} hint={cumulative === undefined ? "该供应商未返回汇总" : `累计 ${fmt.format(num(cumulative))}`} />
-    <div className="metric dm-card"><span>充值</span><strong>{rechargeUrl ? "供应商管理" : "未配置入口"}</strong>{rechargeUrl ? <a className="primary-button external-recharge-link" href={rechargeUrl} target="_blank" rel="noreferrer">前往供应商充值</a> : <em>请在供应商账户中配置充值链接</em>}</div>
-  </div>;
-}
-
-function ProviderAccountsPanel({ title, accounts, onCreate, onEdit }) {
-  return <section className="panel dm-card">
-    <div className="panel-heading"><div><h3>{title}</h3><span className="muted">API Key 永不回显；编辑时留空表示保持原 Key</span></div><button className="primary-button" onClick={onCreate}>新建账户</button></div>
-    <div className="billing-scroll"><table><thead><tr><th>账户名</th><th>供应商 / 协议</th><th>Base URL</th><th>Key</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody>
-      {accounts.length ? accounts.map((account) => <tr key={accountId(account)}><td><strong>{account.name || `账户 #${accountId(account)}`}</strong></td><td>{providerLabel(pick(account, "providerType", "provider_type"))}<br/><span className="muted">{protocolLabel(account.protocol)}</span></td><td className="mono url-cell">{pick(account, "baseUrl", "base_url") || "-"}</td><td className="mono">•••• {pick(account, "apiKeyLastFour", "api_key_last_four") || "----"}</td><td><span className={`badge badge-${account.status === "active" ? "green" : "red"}`}>{account.status === "active" ? "启用" : "停用"}</span></td><td>{displayDate(pick(account, "updatedAt", "updated_at"))}</td><td><button onClick={() => onEdit(account)}>编辑 / 轮换 Key</button></td></tr>) : <tr><td colSpan="7"><Empty title="暂无供应商账户" detail="先创建账户，再为路由选择账户和模型。" /></td></tr>}
-    </tbody></table></div>
+function ConnectionCard({ title, description, settings = {}, account, connected, loading, onConnect, onTest }) {
+  const model = pick(settings, "defaultModel", "default_model");
+  return <section className={`panel dm-card connection-card ${connected ? "is-connected" : "is-empty"}`}>
+    <div className="panel-heading"><div><div className="connection-title"><span className={`connection-dot ${connected ? "online" : ""}`} /><h3>{title}</h3></div><span className="muted">{description}</span></div><div className="actions">{onTest && <button onClick={onTest} disabled={loading}>测试当前连接</button>}<button className="primary-button" onClick={onConnect} disabled={loading}>{connected ? "接入 / 更换线路" : "立即接入"}</button></div></div>
+    {connected ? <div className="simple-connection-facts"><Info label="模型 ID" value={model || "-"} mono /><Info label="Base URL" value={pick(account, "baseUrl", "base_url") || "-"} mono /><Info label="API Key" value={`已安全保存 · 末四位 ${pick(account, "apiKeyLastFour", "api_key_last_four") || "----"}`} /><Info label="接口格式" value={account?.protocol === "anthropic_messages" ? "Anthropic Messages" : "OpenAI Chat"} /></div> : <div className="empty-connection"><strong>尚未连接</strong><span>默认使用呆猫中转站地址，你只需要准备模型 ID 和 API Key。</span></div>}
   </section>;
 }
 
-function ProviderAccountModal({ state, onClose, onSaved, onError, onToast }) {
-  const source = state.account || {};
-  const [form, setForm] = useState({
-    name: source.name || "",
-    providerType: pick(source, "providerType", "provider_type") || "relay",
-    protocol: source.protocol || "openai_chat",
-    baseUrl: pick(source, "baseUrl", "base_url") || "https://s-api.aiarrival.cn/v1",
-    apiKey: "",
-    rechargeUrl: pick(source, "rechargeUrl", "recharge_url") || "",
-    status: source.status || "active",
-  });
+function QuickConnectModal({ scope, appClient, currentSettings = {}, currentAccount, onClose, onSaved, onError, onToast }) {
+  const inferredPreset = inferPreset(currentAccount);
+  const [form, setForm] = useState({ providerPreset: inferredPreset, model: pick(currentSettings, "defaultModel", "default_model") || "", apiKey: "", baseUrl: pick(currentAccount, "baseUrl", "base_url") || providerPresets[inferredPreset].baseUrl });
   const [saving, setSaving] = useState(false);
-  const set = (key, value) => setForm((next) => ({ ...next, [key]: value }));
+  const [connectionError, setConnectionError] = useState(null);
+  const preset = providerPresets[form.providerPreset];
+  const usesAnthropic = form.providerPreset.includes("anthropic") || (form.providerPreset === "daimao" && /^claude(?:[-_.]|$)/i.test(form.model));
+  function changePreset(value) { setForm((next) => ({ ...next, providerPreset: value, baseUrl: providerPresets[value].baseUrl })); setConnectionError(null); }
   async function submit(event) {
     event.preventDefault();
     setSaving(true);
+    setConnectionError(null);
     try {
-      const account = { ...form, accountScope: state.scope, ...(state.communityId ? { communityId: Number(state.communityId) } : {}), ...(accountId(source) ? { id: accountId(source) } : {}) };
-      if (!account.apiKey) delete account.apiKey;
-      await callAdmin("adminUpsertAiProviderAccount", { account });
-      onToast({ type: "success", message: accountId(source) ? "供应商账户已保存" : "供应商账户已创建" });
+      const result = await callAdmin("adminQuickConnectAi", { scope, ...(appClient ? { appClientId: clientId(appClient) } : {}), ...form });
       await onSaved();
-    } catch (error) { onError(error, "供应商账户保存失败"); }
+      if (result.connection?.success === false) {
+        setConnectionError(result.connection);
+        return;
+      }
+      onToast({ type: "success", message: "AI 线路已连接并测试成功" });
+      onClose();
+    } catch (error) { onError(error, "AI 线路接入失败"); }
     finally { setSaving(false); }
   }
-  return <Modal title={accountId(source) ? "编辑供应商账户" : "新建供应商账户"} onClose={onClose}>
-    <form className="billing-form" onSubmit={submit}>
-      <label>账户名<input required maxLength="120" value={form.name} onChange={(event) => set("name", event.target.value)} /></label>
-      <label>供应商类型<select value={form.providerType} onChange={(event) => set("providerType", event.target.value)}><option value="relay">呆猫中转站</option><option value="openai_compatible">OpenAI 兼容服务</option><option value="anthropic">Anthropic</option></select></label>
-      <label>协议<select value={form.protocol} onChange={(event) => set("protocol", event.target.value)}><option value="openai_chat">OpenAI Chat</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label>
-      <label>状态<select value={form.status} onChange={(event) => set("status", event.target.value)}><option value="active">启用</option><option value="disabled">停用</option></select></label>
-      <label>Base URL<input required type="url" placeholder="https://..." value={form.baseUrl} onChange={(event) => set("baseUrl", event.target.value)} /><small>必须是数据中心允许域名内的 HTTPS 地址</small></label>
-      <label>充值链接<input type="url" placeholder="https://..." value={form.rechargeUrl} onChange={(event) => set("rechargeUrl", event.target.value)} /></label>
-      <label>API Key<input required={!accountId(source)} type="password" autoComplete="new-password" value={form.apiKey} onChange={(event) => set("apiKey", event.target.value)} placeholder={accountId(source) ? "留空保持原 Key" : "只会提交到服务端"} /><small>后台不提供查看完整 Key；填写即覆盖/轮换</small></label>
-      <button className="primary-button" disabled={saving}>{saving ? "保存中…" : "保存账户"}</button>
+  return <Modal title={scope === "platform" ? "接入平台 AI" : `接入 ${clientName(appClient)}`} onClose={onClose}>
+    <form className="quick-connect-form" onSubmit={submit}>
+      <div className="quick-connect-intro"><strong>通常只填下面两项</strong><span>模型 ID 和 API Key。Base URL 已按供应商自动填写。</span></div>
+      <Field label="1. 模型 ID" help="从供应商模型列表完整复制，大小写、日期和后缀必须完全一致。"><input required autoFocus value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} placeholder="例如供应商控制台显示的模型名称" /></Field>
+      <Field label="2. API Key" help="从供应商控制台复制完整 Key。只提交到服务端加密保存，以后不会显示完整内容。"><input required type="password" autoComplete="new-password" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value.trim() })} placeholder="sk-... / sk-live-..." /></Field>
+      <Field label="供应商" help={preset.hint}><select value={form.providerPreset} onChange={(event) => changePreset(event.target.value)}>{Object.entries(providerPresets).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}</select></Field>
+      <Field label="Base URL（已默认填写）" help={usesAnthropic ? "当前模型按 Anthropic 接入：这里只填到 /v1，系统会自动拼接 /messages。" : "当前模型按 OpenAI 接入：只填到 /v1，不要填写 /chat/completions 或 /responses。"}><input required type="url" value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://供应商域名/v1" /></Field>
+      {form.providerPreset.startsWith("yylx") && <div className="provider-note"><strong>YYLX 提醒</strong><span>Key 的分组必须支持所选协议和模型；数据中心还需允许域名 <code>app.yylx.io</code>。</span></div>}
+      {connectionError && <div className="connection-test-error"><strong>配置已保存，但测试没有通过</strong><span>{connectionError.code ? `${connectionError.code}: ` : ""}{connectionError.message}</span><em>请核对模型名、Key 分组、余额和 Base URL；修改后重新提交即可。</em></div>}
+      <button className="primary-button quick-connect-submit" disabled={saving}>{saving ? "正在保存并测试…" : "保存并自动测试"}</button>
+      <p className="quick-cost-note">会发送一次很短的真实请求，因此会产生少量上游费用。</p>
     </form>
   </Modal>;
 }
 
-function RouteModal({ scope, client, settings = {}, accounts, onClose, onSaved, onError, onToast }) {
-  const [form, setForm] = useState({
-    billingEnabled: pick(settings, "billingEnabled", "billing_enabled") !== false,
-    billingSource: pick(settings, "billingSource", "billing_source") || "relay",
-    aiProviderAccountId: pick(settings, "aiProviderAccountId", "ai_provider_account_id") || "",
-    defaultModel: pick(settings, "defaultModel", "default_model") || "",
-    taskModels: JSON.stringify(taskModelsOf(settings), null, 2),
-    note: settings.note || "",
-  });
-  const [saving, setSaving] = useState(false);
-  const set = (key, value) => setForm((next) => ({ ...next, [key]: value }));
-  async function submit(event) {
-    event.preventDefault();
-    let taskModels;
-    try { taskModels = form.taskModels.trim() ? JSON.parse(form.taskModels) : {}; }
-    catch { return onError(new Error("任务模型必须是合法 JSON 对象"), "路由保存失败"); }
-    if (!taskModels || Array.isArray(taskModels) || typeof taskModels !== "object") return onError(new Error("任务模型必须是 JSON 对象"), "路由保存失败");
-    const next = { ...form, aiProviderAccountId: form.aiProviderAccountId ? Number(form.aiProviderAccountId) : null, taskModels };
-    delete next.taskModelsText;
-    setSaving(true);
-    try {
-      if (scope === "platform") await callAdmin("adminUpdatePlatformAiSettings", { settings: next });
-      else await callAdmin("adminUpdateAppClientBillingSettings", { appClientId: clientId(client), settings: next });
-      onToast({ type: "success", message: "AI 路由配置已保存" });
-      await onSaved();
-    } catch (error) { onError(error, "AI 路由保存失败"); }
-    finally { setSaving(false); }
+function BillingFacts({ externalBilling = {}, account }) {
+  const providerType = pick(account, "providerType", "provider_type");
+  const data = externalBilling.account || {};
+  if (providerType !== "relay") {
+    const rechargeUrl = pick(account, "rechargeUrl", "recharge_url");
+    return <div className="supplier-managed dm-card"><div><strong>余额由供应商管理</strong><span>该供应商未提供统一的余额读取接口，请在供应商控制台查看余额和账单。</span></div>{rechargeUrl && <a className="primary-button" href={rechargeUrl} target="_blank" rel="noreferrer">打开供应商控制台</a>}</div>;
   }
-  const external = ["relay", "external"].includes(form.billingSource);
-  return <Modal title={scope === "platform" ? "配置平台默认路由" : `配置 ${clientName(client)} 路由`} onClose={onClose} wide>
-    <form className="billing-form" onSubmit={submit}>
-      <label className="check-row"><input type="checkbox" checked={form.billingEnabled} onChange={(event) => set("billingEnabled", event.target.checked)} />启用 AI 路由</label>
-      <label>线路来源<select value={form.billingSource} onChange={(event) => set("billingSource", event.target.value)}><option value="relay">呆猫中转站（可读余额）</option><option value="external">其他外部供应商</option>{scope === "platform" && <option value="local">旧环境变量回退</option>}{scope === "community" && <option value="local">旧本地计费（迁移期）</option>}</select></label>
-      <label>供应商账户<select required={external} disabled={!external} value={form.aiProviderAccountId} onChange={(event) => set("aiProviderAccountId", event.target.value)}><option value="">请选择</option>{accounts.filter((item) => item.status === "active").map((account) => <option key={accountId(account)} value={accountId(account)}>{account.name}</option>)}</select></label>
-      <label>默认模型<input required={external} value={form.defaultModel} onChange={(event) => set("defaultModel", event.target.value)} placeholder="供应商模型 ID" /></label>
-      <label>备注<input value={form.note} onChange={(event) => set("note", event.target.value)} /></label>
-      <label>任务模型 JSON<textarea className="mono" rows="8" value={form.taskModels} onChange={(event) => set("taskModels", event.target.value)} /><small>按任务 key 覆盖默认模型，例如 {`{"assistant_chat_turn":"chat-model"}`}</small></label>
-      <button className="primary-button" disabled={saving}>{saving ? "保存中…" : "保存路由"}</button>
-    </form>
-  </Modal>;
+  const balance = pick(data, "balance", "totalBalance", "total_balance");
+  const reserved = pick(data, "reserved", "reservedBalance", "reserved_balance");
+  const available = pick(data, "available", "availableBalance", "available_balance");
+  return <div className="metric-row billing-metrics provider-power-metrics"><Metric label="可用电力" value={available === undefined ? "暂不可读" : `${fmt.format(num(available))} 电力`} hint="实际可继续使用的额度" /><Metric label="总电力" value={balance === undefined ? "-" : `${fmt.format(num(balance))} 电力`} hint={reserved === undefined ? "中转站实时数据" : `其中预留 ${fmt.format(num(reserved))} 电力`} /><Metric label="计费归属" value="上游中转站" hint="本地钱包不会再扣款" /></div>;
 }
 
-function LegacyBillingPanel({ clients, payload, isSuperAdmin, onReload, onError, onToast }) {
-  const [modal, setModal] = useState(null);
+function AdvancedAccounts({ title, accounts }) {
+  return <details className="advanced-accounts dm-card"><summary>{title}（一般不用操作）</summary><p>重新接入时会自动创建一条独立连接，旧连接保留用于历史审计，不会显示完整 Key。</p><div className="billing-scroll"><table><thead><tr><th>名称</th><th>Base URL</th><th>Key</th><th>格式</th><th>状态</th></tr></thead><tbody>{accounts.length ? accounts.map((account) => <tr key={accountId(account)}><td>{account.name}</td><td className="mono url-cell">{pick(account, "baseUrl", "base_url")}</td><td className="mono">•••• {pick(account, "apiKeyLastFour", "api_key_last_four") || "----"}</td><td>{account.protocol === "anthropic_messages" ? "Anthropic" : "OpenAI"}</td><td>{account.status === "active" ? "启用" : "停用"}</td></tr>) : <tr><td colSpan="5">暂无历史连接</td></tr>}</tbody></table></div></details>;
+}
+
+function ProviderUsage({ rows }) { return <section className="panel dm-card"><div className="panel-heading"><div><h3>中转站用量</h3><span className="muted">供应商返回的最近 {rows.length} 条记录</span></div></div><div className="billing-scroll"><table><thead><tr><th>时间</th><th>模型</th><th>输入 Token</th><th>输出 Token</th><th>上游实扣</th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.id || index}><td>{displayDate(pick(row, "createdAt", "created_at", "timestamp", "time"))}</td><td>{pick(row, "model", "modelName", "model_name", "type") || "-"}</td><td>{fmt.format(num(pick(row, "inputTokens", "input_tokens", "prompt_tokens")))}</td><td>{fmt.format(num(pick(row, "outputTokens", "output_tokens", "completion_tokens")))}</td><td>{fmt.format(num(pick(row, "cost", "chargedPower", "charged_power", "amount", "used")))}</td></tr>)}</tbody></table></div></section>; }
+
+function AuditUsage({ rows }) { return <details className="advanced-accounts dm-card"><summary>查看数据中心审计记录（不作为余额依据）</summary><div className="billing-scroll"><table><thead><tr><th>时间</th><th>任务</th><th>模型</th><th>Token</th></tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={row.id || index}><td>{displayDate(pick(row, "createdAt", "created_at"))}</td><td>{pick(row, "action", "taskType", "task_type") || "AI 请求"}</td><td>{row.model || "-"}</td><td>{fmt.format(num(pick(row, "totalTokens", "total_tokens")))}</td></tr>) : <tr><td colSpan="4">暂无审计记录</td></tr>}</tbody></table></div></details>; }
+
+function LegacyPanel({ clients, payload, isSuperAdmin, onReload, onError, onToast }) {
+  const [target, setTarget] = useState(null);
   const ledger = (payload?.walletLedger || []).filter((row) => clients.some((client) => clientId(client) === Number(pick(row, "appClientId", "app_client_id"))));
-  async function adjust(form) {
-    try {
-      await callAdmin("adminAdjustAppClientBalance", form);
-      onToast({ type: "success", message: "旧本地钱包余额已调整" });
-      setModal(null);
-      await onReload();
-    } catch (error) { onError(error, "余额调整失败"); }
-  }
-  return <>
-    <div className="billing-migration-note dm-card"><strong>旧本地计费仅用于尚未迁移的 AppClient</strong><span>历史钱包和流水会保留，不回滚、不重算；relay / external 账户禁止在这里充值、调账或冻结。</span></div>
-    <section className="panel dm-card"><div className="panel-heading"><div><h3>旧本地钱包</h3><span className="muted">共 {clients.length} 个尚未迁移账户</span></div></div><div className="billing-scroll"><table><thead><tr><th>AppClient</th><th>社区</th><th>状态</th><th>本地余额</th>{isSuperAdmin && <th>操作</th>}</tr></thead><tbody>
-      {clients.length ? clients.map((client) => <tr key={clientId(client)}><td><strong>{clientName(client)}</strong></td><td>{communityIdOf(client) || "-"}</td><td>{pick(walletOf(client), "status") || "active"}</td><td>{fmt.format(num(pick(walletOf(client), "balanceUnits", "balance_units", "balance")))}</td>{isSuperAdmin && <td><button onClick={() => setModal(client)}>余额调整</button></td>}</tr>) : <tr><td colSpan={isSuperAdmin ? "5" : "4"}><Empty title="没有旧本地钱包" detail="当前可见 AppClient 已全部迁移或尚未创建。" /></td></tr>}
-    </tbody></table></div></section>
-    <LegacyLedger rows={ledger} clients={clients} />
-    {modal && <LegacyAdjustModal client={modal} onClose={() => setModal(null)} onSubmit={adjust} />}
-  </>;
+  async function adjust(form) { try { await callAdmin("adminAdjustAppClientBalance", form); onToast({ type: "success", message: "旧钱包余额已调整" }); setTarget(null); await onReload(); } catch (error) { onError(error, "旧钱包调整失败"); } }
+  return <><div className="billing-migration-note dm-card"><strong>这里只保留迁移前的旧钱包</strong><span>已经接入中转站的应用不会在这里扣款，也不能在这里充值或调账。</span></div><section className="panel dm-card"><div className="panel-heading"><div><h3>旧钱包账户</h3><span className="muted">{clients.length} 个尚未迁移</span></div></div><div className="billing-scroll"><table><thead><tr><th>AppClient</th><th>本地余额</th>{isSuperAdmin && <th>操作</th>}</tr></thead><tbody>{clients.length ? clients.map((client) => <tr key={clientId(client)}><td>{clientName(client)}</td><td>{fmt.format(num(pick(walletOf(client), "balanceUnits", "balance_units", "balance")))} 电力</td>{isSuperAdmin && <td><button onClick={() => setTarget(client)}>调整旧余额</button></td>}</tr>) : <tr><td colSpan={isSuperAdmin ? "3" : "2"}>没有旧钱包账户</td></tr>}</tbody></table></div></section><LegacyLedger rows={ledger} clients={clients} />{target && <LegacyAdjustModal client={target} onClose={() => setTarget(null)} onSubmit={adjust} />}</>;
 }
 
-function LegacyAdjustModal({ client, onClose, onSubmit }) {
-  const [form, setForm] = useState({ mode: "add", entryType: "adjustment", units: "", reason: "", idempotencyKey: globalThis.crypto?.randomUUID?.() || `${Date.now()}` });
-  return <Modal title={`旧钱包余额调整 · ${clientName(client)}`} onClose={onClose}><form className="billing-form" onSubmit={(event) => { event.preventDefault(); onSubmit({ ...form, appClientId: clientId(client), units: num(form.units) }); }}>
-    <label>方式<select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}><option value="add">增加</option><option value="subtract">扣减</option><option value="set">设定余额</option></select></label>
-    <label>类型<select value={form.entryType} onChange={(event) => setForm({ ...form, entryType: event.target.value })}><option value="adjustment">人工调整</option><option value="grant">赠送</option><option value="refund">退款 / 补偿</option></select></label>
-    <label>电力数量<input required min="0" type="number" value={form.units} onChange={(event) => setForm({ ...form, units: event.target.value })} /></label>
-    <label>原因<textarea required value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></label>
-    <button className="primary-button">确认调整旧钱包</button>
-  </form></Modal>;
-}
+function LegacyAdjustModal({ client, onClose, onSubmit }) { const [form, setForm] = useState({ mode: "add", entryType: "adjustment", units: "", reason: "", idempotencyKey: globalThis.crypto?.randomUUID?.() || `${Date.now()}` }); return <Modal title={`调整旧钱包 · ${clientName(client)}`} onClose={onClose}><form className="billing-form" onSubmit={(event) => { event.preventDefault(); onSubmit({ ...form, appClientId: clientId(client), units: num(form.units) }); }}><Field label="方式" help="只影响旧本地钱包。"><select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}><option value="add">增加</option><option value="subtract">扣减</option><option value="set">设定余额</option></select></Field><Field label="电力数量" help="请输入非负整数。"><input required min="0" type="number" value={form.units} onChange={(event) => setForm({ ...form, units: event.target.value })} /></Field><Field label="原因" help="用于历史审计。"><textarea required value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></Field><button className="primary-button">确认调整</button></form></Modal>; }
 
-function ExternalUsageTable({ rows }) {
-  return <section className="panel dm-card"><div className="panel-heading"><div><h3>上游真实计量</h3><span className="muted">供应商返回的最近 {rows.length} 条数据</span></div></div><div className="billing-scroll"><table><thead><tr><th>时间</th><th>模型 / 类型</th><th>输入</th><th>输出</th><th>费用</th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.id || index}><td>{displayDate(pick(row, "createdAt", "created_at", "timestamp", "time"))}</td><td>{pick(row, "model", "modelName", "model_name", "type") || "-"}</td><td>{fmt.format(num(pick(row, "inputTokens", "input_tokens", "prompt_tokens")))}</td><td>{fmt.format(num(pick(row, "outputTokens", "output_tokens", "completion_tokens")))}</td><td>{fmt.format(num(pick(row, "cost", "amount", "used")))}</td></tr>)}</tbody></table></div></section>;
-}
+function LegacyLedger({ rows, clients }) { return <details className="advanced-accounts dm-card"><summary>查看旧钱包历史流水</summary><div className="billing-scroll"><table><thead><tr><th>时间</th><th>AppClient</th><th>类型</th><th>变动</th><th>余额</th><th>原因</th></tr></thead><tbody>{rows.length ? rows.map((row, index) => { const client = clients.find((item) => clientId(item) === Number(pick(row, "appClientId", "app_client_id"))); return <tr key={row.id || index}><td>{displayDate(pick(row, "createdAt", "created_at"))}</td><td>{clientName(client || row)}</td><td>{pick(row, "entryType", "entry_type") || "-"}</td><td>{fmt.format(num(pick(row, "unitsDelta", "delta_units", "units")))}</td><td>{fmt.format(num(pick(row, "balanceAfter", "balance_after")))}</td><td>{row.reason || "-"}</td></tr>; }) : <tr><td colSpan="6">暂无旧钱包流水</td></tr>}</tbody></table></div></details>; }
 
-function AuditUsageTable({ rows }) {
-  return <section className="panel dm-card"><div className="panel-heading"><div><h3>数据中心审计记录</h3><span className="muted">仅用于审计，不是余额事实来源</span></div></div><div className="billing-scroll"><table><thead><tr><th>时间</th><th>任务</th><th>模型</th><th>Token</th></tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={row.id || index}><td>{displayDate(pick(row, "createdAt", "created_at"))}</td><td>{pick(row, "action", "taskType", "task_type") || "AI 请求"}</td><td>{row.model || "-"}</td><td>{fmt.format(num(pick(row, "totalTokens", "total_tokens")))}</td></tr>) : <tr><td colSpan="4"><Empty title="暂无审计记录" /></td></tr>}</tbody></table></div></section>;
-}
-
-function LegacyLedger({ rows, clients }) {
-  return <section className="panel dm-card"><div className="panel-heading"><div><h3>旧钱包历史流水</h3><span className="muted">只展示本地钱包数据</span></div></div><div className="billing-scroll"><table><thead><tr><th>时间</th><th>AppClient</th><th>类型</th><th>变动</th><th>余额</th><th>原因</th></tr></thead><tbody>{rows.length ? rows.map((row, index) => { const client = clients.find((item) => clientId(item) === Number(pick(row, "appClientId", "app_client_id"))); return <tr key={row.id || index}><td>{displayDate(pick(row, "createdAt", "created_at"))}</td><td>{clientName(client || row)}</td><td>{pick(row, "entryType", "entry_type") || "-"}</td><td>{fmt.format(num(pick(row, "unitsDelta", "delta_units", "units")))}</td><td>{fmt.format(num(pick(row, "balanceAfter", "balance_after")))}</td><td>{row.reason || "-"}</td></tr>; }) : <tr><td colSpan="6"><Empty title="暂无旧钱包流水" /></td></tr>}</tbody></table></div></section>;
-}
-
-function ReadError({ error }) { return <div className="external-read-error dm-card"><strong>上游数据暂不可用</strong><span>{typeof error === "string" ? error : `${error.code ? `${error.code}: ` : ""}${error.message || JSON.stringify(error)}`}</span><em>不会回退展示数据中心本地钱包余额。</em></div>; }
+function inferPreset(account) { if (!account) return "daimao"; const base = pick(account, "baseUrl", "base_url") || ""; if (base.includes("app.yylx.io")) return account?.protocol === "anthropic_messages" ? "yylx_anthropic" : "yylx_openai"; if (base.includes("s-api.aiarrival.cn")) return "daimao"; return account?.protocol === "anthropic_messages" ? "custom_anthropic" : "custom_openai"; }
+function ReadError({ error }) { return <div className="external-read-error dm-card"><strong>暂时读不到中转站余额</strong><span>{typeof error === "string" ? error : `${error.code ? `${error.code}: ` : ""}${error.message || JSON.stringify(error)}`}</span><em>这不会改用旧钱包；请检查 Key、余额和网络后刷新。</em></div>; }
 function Metric({ label, value, hint }) { return <div className="metric dm-card"><span>{label}</span><strong>{value}</strong><em>{hint}</em></div>; }
 function Info({ label, value, mono }) { return <div><span>{label}</span><strong className={mono ? "mono" : ""}>{value}</strong></div>; }
+function Field({ label, help, children }) { return <label className="explained-field"><strong>{label}</strong>{children}<small>{help}</small></label>; }
 function Empty({ title, detail }) { return <div className="empty-state"><strong>{title}</strong>{detail && <span>{detail}</span>}</div>; }
-function Modal({ title, children, onClose, wide }) { return <div className="modal-backdrop" onMouseDown={onClose}><div className={`modal-card dm-card billing-modal ${wide ? "modal-wide" : ""}`} onMouseDown={(event) => event.stopPropagation()}><div className="modal-header"><h3>{title}</h3><button type="button" onClick={onClose}>关闭</button></div>{children}</div></div>; }
-function sourceLabel(source) { return ({ relay: "呆猫中转站", external: "外部供应商", local: "旧本地线路" })[source] || source || "未配置"; }
-function providerLabel(type) { return ({ relay: "呆猫中转站", openai_compatible: "OpenAI 兼容", anthropic: "Anthropic" })[type] || type || "-"; }
-function protocolLabel(protocol) { return ({ openai_chat: "OpenAI Chat", openai_responses: "OpenAI Responses", anthropic_messages: "Anthropic Messages" })[protocol] || protocol || "-"; }
+function Modal({ title, children, onClose }) { return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal-card dm-card billing-modal" onMouseDown={(event) => event.stopPropagation()}><div className="modal-header"><h3>{title}</h3><button type="button" onClick={onClose}>关闭</button></div>{children}</div></div>; }
