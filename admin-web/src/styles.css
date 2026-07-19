@@ -1150,6 +1150,41 @@ button:disabled {
 .external-read-error { border-left-color: #c65136; background: #fff5f1; }
 .modal-wide { width: min(880px, calc(100vw - 28px)); }
 .billing-form textarea.mono { min-height: 160px; }
+.simple-ai-header { gap: 18px; }
+.connection-card { padding: 0; overflow: hidden; }
+.connection-card.is-connected { border-color: #d8e7d4; }
+.connection-title { display: flex; align-items: center; gap: 9px; }
+.connection-title h3 { margin: 0; }
+.connection-dot { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%; background: #b8b1a7; box-shadow: 0 0 0 4px #eeeae4; }
+.connection-dot.online { background: #3b8f55; box-shadow: 0 0 0 4px #e1f1e5; }
+.simple-connection-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 0 20px 20px; }
+.simple-connection-facts > div { display: grid; gap: 6px; min-width: 0; padding: 14px; border-radius: 12px; background: #faf8f3; }
+.simple-connection-facts span { color: #746d65; font-size: 12px; font-weight: 800; }
+.simple-connection-facts strong { overflow-wrap: anywhere; font-size: 14px; }
+.empty-connection { display: grid; gap: 5px; padding: 0 20px 22px; color: #6d665e; }
+.quick-connect-form { display: grid; gap: 15px; padding: 20px; }
+.quick-connect-intro { display: grid; gap: 4px; padding: 15px; border-radius: 12px; background: #fff7df; }
+.quick-connect-intro strong { font-size: 16px; }
+.quick-connect-intro span { color: #6d665e; font-size: 13px; }
+.explained-field { display: grid; gap: 7px; color: #4f4943; }
+.explained-field > strong { font-size: 13px; }
+.explained-field input, .explained-field select, .explained-field textarea { width: 100%; }
+.explained-field small { color: #746d65; font-size: 12px; font-weight: 650; line-height: 1.5; }
+.provider-note, .connection-test-error { display: grid; gap: 5px; padding: 13px 15px; border-left: 4px solid #d29c20; border-radius: 8px; background: #fff9e9; }
+.provider-note span, .connection-test-error span, .connection-test-error em { color: #6b645c; font-size: 12px; font-style: normal; line-height: 1.5; }
+.connection-test-error { border-left-color: #c65136; background: #fff3ef; }
+.quick-connect-submit { min-height: 44px; }
+.quick-cost-note { margin: -5px 0 0; color: #777068; font-size: 11px; text-align: center; }
+.provider-power-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.supplier-managed { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; }
+.supplier-managed > div { display: grid; gap: 5px; }
+.supplier-managed span { color: #706961; font-size: 13px; }
+.supplier-managed a { flex: 0 0 auto; text-decoration: none; }
+.advanced-accounts { padding: 0; overflow: hidden; }
+.advanced-accounts summary { padding: 17px 20px; cursor: pointer; font-weight: 900; }
+.advanced-accounts > p { margin: -5px 20px 16px; color: #706961; font-size: 12px; }
+.advanced-accounts[open] summary { border-bottom: 1px solid #eee9e1; }
+.simple-client-picker { padding: 0; }
 .immutable-hint { grid-column: 1 / -1; margin: 0; padding: 10px 12px; border: 2px solid #23211f; border-radius: 10px; background: #d7e8ff; color: #3e5269; font-size: 12px; font-weight: 800; }
 
 .pricing-page { display: grid; gap: 18px; max-width: 1380px; margin: 0 auto; }
@@ -1332,6 +1367,8 @@ button:disabled {
   .billing-detail-grid { grid-template-columns: 1fr; }
   .community-billing-metrics { grid-template-columns: 1fr; }
   .external-billing-metrics, .ai-route-grid, .appclient-route-list { grid-template-columns: 1fr; }
+  .simple-connection-facts, .provider-power-metrics { grid-template-columns: 1fr; }
+  .supplier-managed { align-items: flex-start; flex-direction: column; }
   .pricing-current-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pricing-columns { grid-template-columns: 1fr; }
   .customer-price-card { grid-template-columns: 1fr 1fr; }

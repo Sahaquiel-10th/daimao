@@ -1169,6 +1169,153 @@ function externalBillingSource(client, payload) {
   return source === "ai_provider" || source === "relay" || source === "external";
 }
 
+const quickAiProviderPresets = {
+  daimao: {
+    label: "呆猫中转站",
+    providerType: "relay",
+    protocol: "openai_chat",
+    billingSource: "relay",
+    defaultBaseUrl: "https://s-api.aiarrival.cn/v1",
+    rechargeUrl: "",
+  },
+  yylx_openai: {
+    label: "YYLX · OpenAI",
+    providerType: "openai_compatible",
+    protocol: "openai_chat",
+    billingSource: "external",
+    defaultBaseUrl: "https://app.yylx.io/v1",
+    rechargeUrl: "https://app.yylx.io",
+  },
+  yylx_anthropic: {
+    label: "YYLX · Anthropic",
+    providerType: "anthropic",
+    protocol: "anthropic_messages",
+    billingSource: "external",
+    defaultBaseUrl: "https://app.yylx.io/v1",
+    rechargeUrl: "https://app.yylx.io",
+  },
+  custom_openai: {
+    label: "其他 OpenAI 兼容服务",
+    providerType: "openai_compatible",
+    protocol: "openai_chat",
+    billingSource: "external",
+    defaultBaseUrl: "",
+    rechargeUrl: "",
+  },
+  custom_anthropic: {
+    label: "其他 Anthropic 服务",
+    providerType: "anthropic",
+    protocol: "anthropic_messages",
+    billingSource: "external",
+    defaultBaseUrl: "",
+    rechargeUrl: "",
+  },
+};
+
+function requireBusinessSuccess(result, fallbackMessage) {
+  if (result && result.success !== false) return result;
+  const error = new Error((result && result.message) || fallbackMessage || "数据中心操作失败");
+  error.code = (result && result.code) || "DATA_CENTER_ERROR";
+  throw error;
+}
+
+function quickConnectionResult(result) {
+  if (result && result.success !== false) return { success: true, result: sanitizeAiPayload(result) };
+  return {
+    success: false,
+    code: (result && result.code) || "AI_CONNECTION_TEST_FAILED",
+    message: (result && result.message) || "配置已保存，但连通测试失败",
+  };
+}
+
+async function adminQuickConnectAi(data) {
+  await assertAdmin(data);
+  const session = sessionFromData(data);
+  const scope = data.scope === "platform" ? "platform" : "community";
+  const presetKey = String(data.providerPreset || "daimao");
+  const preset = quickAiProviderPresets[presetKey];
+  if (!preset) throw Object.assign(new Error("不支持这个供应商预设"), { code: "VALIDATION_ERROR" });
+  const model = text(data.model, 160);
+  const apiKey = text(data.apiKey, 500);
+  const baseUrl = text(data.baseUrl || preset.defaultBaseUrl, 1000);
+  if (!model) throw Object.assign(new Error("请填写供应商控制台中的精确模型 ID"), { code: "AI_MODEL_NOT_CONFIGURED" });
+  if (!apiKey) throw Object.assign(new Error("请粘贴供应商 API Key"), { code: "AI_PROVIDER_ACCOUNT_REQUIRED" });
+  if (!baseUrl) throw Object.assign(new Error("请填写 Base URL"), { code: "VALIDATION_ERROR" });
+  const protocol = presetKey === "daimao" && /^claude(?:[-_.]|$)/i.test(model)
+    ? "anthropic_messages"
+    : preset.protocol;
+
+  let appClient = null;
+  let communityId = null;
+  let contextLabel = "平台";
+  if (scope === "platform") {
+    if (!session || session.role !== "super_admin") throw Object.assign(new Error("只有超级管理员可以配置平台线路"), { code: "FORBIDDEN" });
+  } else {
+    const scoped = await assertAppClientAccess(data, data.appClientId);
+    if (scoped.result && scoped.result.success === false) return scoped.result;
+    appClient = scoped.client;
+    communityId = billingClientCommunityId(appClient);
+    contextLabel = String(appClient.name || appClient.clientName || `AppClient ${billingClientId(appClient)}`);
+  }
+
+  const suffix = `${new Date().toISOString().slice(0, 16).replace(/[-T:]/g, "")}-${apiKey.slice(-4)}`;
+  const accountResult = requireBusinessSuccess(await callBusiness(businessData({
+    action: "adminUpsertAiProviderAccount",
+    account: {
+      accountScope: scope,
+      ...(communityId ? { communityId } : {}),
+      name: `${contextLabel} · ${preset.label} · ${model} · ${suffix}`.slice(0, 120),
+      providerType: preset.providerType,
+      protocol,
+      baseUrl,
+      apiKey,
+      rechargeUrl: preset.rechargeUrl,
+      status: "active",
+      note: "由管理后台快速接入自动创建",
+    },
+  })), "供应商账户创建失败");
+  const providerAccount = accountResult.providerAccount || providerAccountsFrom(accountResult)[0];
+  const savedAccountId = providerAccountId(providerAccount);
+  if (!savedAccountId) throw Object.assign(new Error("供应商账户已保存，但未返回账户 ID"), { code: "AI_PROVIDER_ACCOUNT_SAVE_FAILED" });
+
+  const settings = {
+    billingEnabled: true,
+    billingSource: preset.billingSource,
+    aiProviderAccountId: savedAccountId,
+    defaultModel: model,
+    taskModels: {},
+    note: `${preset.label} 快速接入`,
+  };
+  const routeResult = scope === "platform"
+    ? requireBusinessSuccess(await callBusiness(businessData({ action: "adminUpdatePlatformAiSettings", settings })), "平台线路绑定失败")
+    : requireBusinessSuccess(await callBusiness(businessData({ action: "adminUpdateAppClientBillingSettings", appClientId: billingClientId(appClient), settings })), "社区线路绑定失败");
+
+  let connection;
+  try {
+    const testResult = scope === "platform"
+      ? await callBusiness(businessData({ action: "adminCheckPlatformAiConnection" }))
+      : await callBusiness(businessData({
+          action: "adminTestAppClientAiBilling",
+          appClientId: billingClientId(appClient),
+          idempotencyKey: crypto.randomUUID(),
+          prompt: "请只回复连接成功",
+        }));
+    connection = quickConnectionResult(testResult);
+  } catch (error) {
+    connection = { success: false, code: error.code || "AI_CONNECTION_TEST_FAILED", message: error.message || "配置已保存，但连通测试失败" };
+  }
+
+  return sanitizeAiPayload({
+    success: true,
+    scope,
+    appClientId: appClient ? billingClientId(appClient) : null,
+    providerPreset: presetKey,
+    providerAccount,
+    route: routeResult,
+    connection,
+  });
+}
+
 function billingRowClientId(row) {
   return Number(row && (row.appClientId ?? row.app_client_id ?? row.clientId ?? row.client_id)) || 0;
 }
@@ -1376,6 +1523,7 @@ async function adminProxyAction(data) {
     "adminUpdatePlatformAiSettings",
     "adminCheckPlatformAiConnection",
   ]);
+  if (data.action === "adminQuickConnectAi") return adminQuickConnectAi(data);
   if (platformAiActions.has(data.action)) {
     requireSuperAdmin(data);
     return sanitizeAiPayload(await callBusiness(businessData(data)));
