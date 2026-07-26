@@ -150,6 +150,7 @@ const mockState = {
   ],
   communities: [
     { id: 1, name: "OPC 共创营", badge_name: "OPC", description: "务实接单、项目共创", logo_url: "", certification_method: "manual_review", status: "active", sort_weight: 100 },
+    { id: 2, name: "IHD 社区", badge_name: "IHD", description: "呆猫小程序社区", logo_url: "", certification_method: "manual_review", status: "active", sort_weight: 90 },
   ],
   adminAccounts: [
     { id: 1, username: "community_demo", display_name: "OPC 社区管理员", role: "community_admin", status: "active", communityIds: [1], updated_at: now },
@@ -215,6 +216,29 @@ async function mockCall(action, data) {
       mockState.aiProviderAccounts.push({ ...account, id: Date.now(), apiKeyLastFour: String(account.apiKey || "").slice(-4), updatedAt: new Date().toISOString() });
     }
     return { success: true, saved: true };
+  }
+  if (action === "adminUpsertAppClient") {
+    const client = data.client || data;
+    const existingId = Number(client.id || client.appClientId || 0);
+    const existing = existingId
+      ? mockState.billingClients.find((item) => item.id === existingId)
+      : mockState.billingClients.find((item) => item.appid === client.appid);
+    const saved = {
+      ...(existing || {}),
+      id: existing?.id || Date.now(),
+      appid: client.appid,
+      name: client.name,
+      communityId: Number(client.communityId || 0) || null,
+      clientType: client.clientType || "wechat_miniprogram",
+      status: client.status || "active",
+      balanceSource: existing?.balanceSource || "local_wallet",
+      billingSettings: existing?.billingSettings || { billingEnabled: false, billingSource: "local", defaultModel: "", taskModels: {} },
+      wallet: existing?.wallet || { status: "active", balanceUnits: 0 },
+    };
+    mockState.billingClients = existing
+      ? mockState.billingClients.map((item) => item.id === saved.id ? saved : item)
+      : [saved, ...mockState.billingClients];
+    return { success: true, appClient: saved };
   }
   if (action === "adminQuickConnectAi") {
     const presets = {

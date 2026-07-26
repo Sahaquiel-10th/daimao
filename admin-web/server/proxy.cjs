@@ -532,7 +532,7 @@ async function assertAdmin(data) {
   const token = resolveAdminWebToken(data);
   if (!token) {
     const error = new Error("请先登录后台");
-    error.code = "FORBIDDEN";
+    error.code = "LOGIN_REQUIRED";
     throw error;
   }
   const result = await callBusiness({ action: "adminList", adminWebToken: token });
