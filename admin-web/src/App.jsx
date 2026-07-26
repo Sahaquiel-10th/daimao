@@ -264,9 +264,11 @@ function assetStatusText(value) {
 
 function isSessionError(err) {
   const code = err && err.code;
-  const message = String((err && err.message) || "");
-  return ["LOGIN_FAILED", "LOGIN_NOT_CONFIGURED", "UNAUTHORIZED", "LOGIN_REQUIRED"].includes(code)
-    || /请先登录后台|登录失败|会话|session/i.test(message);
+  const message = String((err && (err.serverMessage || err.message)) || "");
+  // 供应商也可能返回 UNAUTHORIZED、session 等字样，不能据此清空后台会话。
+  // 只有后台代理明确声明登录失效，或明确要求重新登录时，才退出当前账号。
+  return ["LOGIN_REQUIRED", "ADMIN_SESSION_INVALID", "ADMIN_SESSION_EXPIRED"].includes(code)
+    || /^请先登录后台(?:$|[，。:：\s])/.test(message);
 }
 
 function officialDisplayOrder(weight) {

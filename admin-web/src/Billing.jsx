@@ -14,6 +14,7 @@ const clientName = (client) => pick(client, "name", "clientName", "client_name")
 const billingSource = (client) => pick(settingsOf(client), "billingSource", "billing_source") || (pick(client, "balanceSource", "balance_source") === "ai_provider" ? "external" : "local");
 const isExternalClient = (client) => pick(client, "balanceSource", "balance_source") === "ai_provider" || ["relay", "external"].includes(billingSource(client));
 const displayDate = (value) => value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "-";
+const daimaoMiniProgramAppId = "wx2bc83fb7b03cd3d1";
 
 const providerPresets = {
   daimao: { label: "我的呆猫中转站（推荐）", baseUrl: "https://s-api.aiarrival.cn/v1", hint: "默认选择。Claude 模型自动走 Anthropic，其余模型走 OpenAI；支持读取真实电力余额和用量。" },
@@ -115,6 +116,7 @@ function CommunityPanel({ clients, communities, isSuperAdmin, loading, onReload,
   const [detail, setDetail] = useState(null);
   const [busy, setBusy] = useState(false);
   const [connect, setConnect] = useState(false);
+  const [clientSetup, setClientSetup] = useState(false);
   const communityClients = useMemo(() => clients.filter((item) => communityIdOf(item) === communityId), [clients, communityId]);
   const selected = communityClients.find((item) => clientId(item) === selectedId) || communityClients[0];
 
@@ -131,6 +133,9 @@ function CommunityPanel({ clients, communities, isSuperAdmin, loading, onReload,
     loadDetail(next);
   }, [communityId, clients.length]);
   useEffect(() => { if (selectedId) loadDetail(selectedId); }, [selectedId]);
+  useEffect(() => {
+    if (!communityId && communities[0]?.id) setCommunityId(Number(communities[0].id));
+  }, [communityId, communities]);
 
   const effectiveClient = (detail?.clients || []).find((item) => clientId(item) === clientId(selected)) || selected;
   const settings = settingsOf(effectiveClient);
@@ -139,8 +144,8 @@ function CommunityPanel({ clients, communities, isSuperAdmin, loading, onReload,
 
   return <>
     <section className="panel dm-card simple-client-picker">
-      <div className="panel-heading"><div><h3>选择要接入的应用</h3><span className="muted">每个 AppClient 独立选择模型和 Key</span></div><div className="actions"><select aria-label="选择社区" value={communityId} onChange={(event) => setCommunityId(Number(event.target.value))}>{communities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button disabled={busy || loading} onClick={onReload}>刷新</button></div></div>
-      {!communityId ? <Empty title="没有可管理的社区" /> : communityClients.length ? <div className="appclient-route-list">{communityClients.map((client) => <button key={clientId(client)} className={`appclient-route-card ${clientId(client) === clientId(selected) ? "selected" : ""}`} onClick={() => setSelectedId(clientId(client))}><strong>{clientName(client)}</strong><span>{pick(client, "appid", "appId", "app_id") || `#${clientId(client)}`}</span><em>{isExternalClient(client) ? pick(settingsOf(client), "defaultModel", "default_model") || "已接入" : "等待接入"}</em></button>)}</div> : <Empty title="该社区暂无 AppClient" detail={isSuperAdmin ? "请先创建社区 AppClient。" : "请联系超级管理员创建 AppClient。"} />}
+      <div className="panel-heading"><div><h3>选择要接入的应用</h3><span className="muted">AppClient 就是使用 AI 的小程序、网站或服务</span></div><div className="actions"><select aria-label="选择社区" value={communityId} onChange={(event) => setCommunityId(Number(event.target.value))}>{communities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{isSuperAdmin && <button className="primary-button" disabled={!communityId || busy || loading} onClick={() => setClientSetup(true)}>添加 / 绑定小程序</button>}<button disabled={busy || loading} onClick={onReload}>刷新</button></div></div>
+      {!communityId ? <Empty title="没有可管理的社区" /> : communityClients.length ? <div className="appclient-route-list">{communityClients.map((client) => <button key={clientId(client)} className={`appclient-route-card ${clientId(client) === clientId(selected) ? "selected" : ""}`} onClick={() => setSelectedId(clientId(client))}><strong>{clientName(client)}</strong><span>{pick(client, "appid", "appId", "app_id") || `#${clientId(client)}`}</span><em>{isExternalClient(client) ? pick(settingsOf(client), "defaultModel", "default_model") || "已接入" : "等待接入"}</em></button>)}</div> : <div className="empty-client-setup"><Empty title="该社区暂无 AppClient" detail={isSuperAdmin ? "点击“添加 / 绑定小程序”，把呆猫小程序绑定到当前社区。" : "请联系超级管理员绑定小程序。"} />{isSuperAdmin && <button className="primary-button" onClick={() => setClientSetup(true)}>添加 / 绑定小程序</button>}</div>}
     </section>
     {selected && <>
       <ConnectionCard title={clientName(selected)} description={communityName(communities, communityIdOf(selected))} settings={settings} account={account} connected={connected} loading={busy} onConnect={() => setConnect(true)} />
@@ -151,7 +156,52 @@ function CommunityPanel({ clients, communities, isSuperAdmin, loading, onReload,
       {!connected && <div className="billing-migration-note dm-card"><strong>还没有接入中转站</strong><span>点击“立即接入”，通常只需填写模型 ID 和 API Key。</span></div>}
       {connect && <QuickConnectModal scope="community" appClient={selected} currentSettings={settings} currentAccount={account} onClose={() => setConnect(false)} onSaved={async () => { await onReload(); await loadDetail(clientId(selected)); }} onError={onError} onToast={onToast} />}
     </>}
+    {clientSetup && <AppClientSetupModal communityId={communityId} communityLabel={communityName(communities, communityId)} clients={clients} onClose={() => setClientSetup(false)} onSaved={async () => { setClientSetup(false); await onReload(); }} onError={onError} onToast={onToast} />}
   </>;
+}
+
+function AppClientSetupModal({ communityId, communityLabel, clients, onClose, onSaved, onError, onToast }) {
+  const [form, setForm] = useState({ name: "呆猫小程序", appid: daimaoMiniProgramAppId });
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    setSaving(true);
+    const normalizedAppid = form.appid.trim();
+    const existing = clients.find((item) => String(pick(item, "appid", "appId", "app_id") || "").trim() === normalizedAppid);
+    const previousCommunityId = communityIdOf(existing);
+    try {
+      const result = await callAdmin("adminUpsertAppClient", {
+        client: {
+          ...(existing ? { id: clientId(existing) } : {}),
+          appid: normalizedAppid,
+          name: form.name.trim(),
+          communityId,
+          clientType: "wechat_miniprogram",
+          status: "active",
+        },
+      });
+      if (existing && previousCommunityId !== Number(communityId) && isExternalClient(existing)) {
+        await callAdmin("adminUpdateAppClientBillingSettings", {
+          appClientId: clientId(existing),
+          settings: { billingEnabled: false, billingSource: "local", aiProviderAccountId: null, defaultModel: "", taskModels: {}, note: "AppClient 重新绑定社区后等待配置 AI 线路" },
+        });
+      }
+      onToast({ type: "success", message: existing ? `小程序已绑定到 ${communityLabel}` : `小程序已添加到 ${communityLabel}` });
+      await onSaved(result.appClient);
+    } catch (error) { onError(error, "小程序绑定失败"); }
+    finally { setSaving(false); }
+  }
+
+  return <Modal title={`添加 / 绑定小程序 · ${communityLabel}`} onClose={onClose}>
+    <form className="quick-connect-form" onSubmit={submit}>
+      <div className="quick-connect-intro"><strong>这里设置 AppClient</strong><span>保存后，这个小程序就会出现在当前社区的 AI 线路列表中。</span></div>
+      <Field label="小程序名称" help="只用于后台识别，不影响小程序里显示的名称。"><input required autoFocus value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：呆猫小程序" /></Field>
+      <Field label="小程序 AppID" help="在微信公众平台或微信开发者工具的项目配置里查看。呆猫小程序的 AppID 已经默认填好。"><input required className="mono" value={form.appid} onChange={(event) => setForm({ ...form, appid: event.target.value.trim() })} placeholder="wx..." /></Field>
+      <div className="provider-note"><strong>将绑定到：{communityLabel}</strong><span>如果这个 AppID 已绑定到其他社区，保存后会移动到当前社区；旧社区的 AI 线路会解除，避免跨社区共用 Key。</span></div>
+      <button className="primary-button quick-connect-submit" disabled={saving}>{saving ? "正在保存…" : "保存小程序绑定"}</button>
+    </form>
+  </Modal>;
 }
 
 function ConnectionCard({ title, description, settings = {}, account, connected, loading, onConnect, onTest }) {

@@ -1185,6 +1185,7 @@ button:disabled {
 .advanced-accounts > p { margin: -5px 20px 16px; color: #706961; font-size: 12px; }
 .advanced-accounts[open] summary { border-bottom: 1px solid #eee9e1; }
 .simple-client-picker { padding: 0; }
+.empty-client-setup { display: grid; justify-items: center; gap: 12px; padding: 0 20px 22px; }
 .immutable-hint { grid-column: 1 / -1; margin: 0; padding: 10px 12px; border: 2px solid #23211f; border-radius: 10px; background: #d7e8ff; color: #3e5269; font-size: 12px; font-weight: 800; }
 
 .pricing-page { display: grid; gap: 18px; max-width: 1380px; margin: 0 auto; }
