@@ -242,21 +242,21 @@ async function mockCall(action, data) {
   }
   if (action === "adminQuickConnectAi") {
     const presets = {
-      daimao: { label: "呆猫中转站", providerType: "relay", protocol: "openai_chat", billingSource: "relay", baseUrl: "https://s-api.aiarrival.cn/v1", rechargeUrl: "" },
-      yylx_openai: { label: "YYLX · OpenAI", providerType: "openai_compatible", protocol: "openai_chat", billingSource: "external", baseUrl: "https://app.yylx.io/v1", rechargeUrl: "https://app.yylx.io" },
-      yylx_anthropic: { label: "YYLX · Anthropic", providerType: "anthropic", protocol: "anthropic_messages", billingSource: "external", baseUrl: "https://app.yylx.io/v1", rechargeUrl: "https://app.yylx.io" },
-      custom_openai: { label: "其他 OpenAI 兼容服务", providerType: "openai_compatible", protocol: "openai_chat", billingSource: "external", baseUrl: "", rechargeUrl: "" },
-      custom_anthropic: { label: "其他 Anthropic 服务", providerType: "anthropic", protocol: "anthropic_messages", billingSource: "external", baseUrl: "", rechargeUrl: "" },
+      super_relay: { label: "超级中转站", providerType: "relay", protocol: "openai_chat", billingSource: "relay", baseUrl: "https://s-api.aiarrival.cn/v1", rechargeUrl: "" },
+      custom_auto: { label: "其他 API 服务", providerType: "openai_compatible", protocol: "openai_chat", billingSource: "external", baseUrl: "", rechargeUrl: "" },
     };
-    const preset = presets[data.providerPreset || "daimao"] || presets.daimao;
+    const preset = presets[data.providerPreset || "super_relay"] || presets.super_relay;
     const targetClient = data.scope === "platform" ? null : mockState.billingClients.find((item) => item.id === Number(data.appClientId));
-    const protocol = (data.providerPreset || "daimao") === "daimao" && /^claude(?:[-_.]|$)/i.test(data.model || "") ? "anthropic_messages" : preset.protocol;
+    const protocol = data.protocolPreference === "anthropic_messages"
+      || (data.protocolPreference !== "openai_chat" && /^claude(?:[-_.]|$)/i.test(data.model || ""))
+      ? "anthropic_messages"
+      : "openai_chat";
     const providerAccount = {
       id: Date.now(),
       accountScope: data.scope === "platform" ? "platform" : "community",
       communityId: targetClient?.communityId || null,
       name: `${targetClient?.name || "平台"} · ${preset.label} · ${data.model}`,
-      providerType: preset.providerType,
+      providerType: preset.providerType === "relay" ? "relay" : protocol === "anthropic_messages" ? "anthropic" : "openai_compatible",
       protocol,
       baseUrl: data.baseUrl || preset.baseUrl,
       apiKeyLastFour: String(data.apiKey || "").slice(-4),
@@ -277,7 +277,7 @@ async function mockCall(action, data) {
       success: true,
       clients,
       ...(selected?.balanceSource === "ai_provider" ? { externalBilling: mockExternalBilling } : {}),
-      usageEvents: selected ? [{ id: 11, appClientId: selected.id, action: "assistant_chat_turn", model: "gpt-5-mini", totalTokens: 1770, chargedUnits: 44, createdAt: now }] : [],
+      usageEvents: selected ? [{ id: 11, appClientId: selected.id, action: "assistant_chat_turn", model: "gpt-5-mini", inputTokens: 1350, outputTokens: 420, totalTokens: 1770, providerChargedPower: 0.043, providerStatus: "success", createdAt: now }] : [],
       walletLedger: mockState.billingClients.filter((item) => item.balanceSource === "local_wallet").map((item) => ({ id: item.id, appClientId: item.id, entryType: "adjustment", unitsDelta: 88000, balanceAfter: 88000, reason: "历史余额", createdAt: now })),
       rechargeOrders: [],
       usageSummary: { requestCount: 1, totalTokens: 1770, chargedUnits: 44 },
