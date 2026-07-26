@@ -273,10 +273,12 @@ async function mockCall(action, data) {
   if (action === "adminGetAppClientBilling") {
     const clients = data.appClientId ? mockState.billingClients.filter((item) => item.id === Number(data.appClientId)) : mockState.billingClients;
     const selected = clients[0];
+    const responseClients = clients.map((client) => selected?.balanceSource === "ai_provider" && client.id === selected.id
+      ? { ...client, externalBilling: mockExternalBilling }
+      : client);
     return {
       success: true,
-      clients,
-      ...(selected?.balanceSource === "ai_provider" ? { externalBilling: mockExternalBilling } : {}),
+      clients: responseClients,
       usageEvents: selected ? [{ id: 11, appClientId: selected.id, action: "assistant_chat_turn", model: "gpt-5-mini", inputTokens: 1350, outputTokens: 420, totalTokens: 1770, providerChargedPower: 0.043, providerStatus: "success", createdAt: now }] : [],
       walletLedger: mockState.billingClients.filter((item) => item.balanceSource === "local_wallet").map((item) => ({ id: item.id, appClientId: item.id, entryType: "adjustment", unitsDelta: 88000, balanceAfter: 88000, reason: "历史余额", createdAt: now })),
       rechargeOrders: [],

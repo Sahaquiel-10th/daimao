@@ -215,13 +215,14 @@ function CommunityPanel({ clients, communities, isSuperAdmin, loading, onReload,
 
   const effectiveClient = (detail?.clients || []).find((item) => clientId(item) === clientId(selected)) || selected;
   const settings = settingsOf(effectiveClient);
-  const account = detail?.externalBilling?.providerAccount;
+  const externalBilling = detail?.externalBilling || effectiveClient?.externalBilling || effectiveClient?.external_billing || null;
+  const account = externalBilling?.providerAccount;
   const connected = effectiveClient && isExternalClient(effectiveClient) && account;
   const auditRows = detail?.usageEvents || [];
-  const providerRows = usageRows(detail?.externalBilling);
+  const providerRows = usageRows(externalBilling);
   const callRows = providerRows.length ? providerRows : auditRows;
   const localHasMore = Boolean(pick(detail?.pagination || {}, "hasMoreUsage", "has_more_usage"));
-  const providerPagination = usagePagination(detail?.externalBilling, usagePage, providerRows);
+  const providerPagination = usagePagination(externalBilling, usagePage, providerRows);
   const hasMoreUsage = providerRows.length ? providerPagination.hasMore : localHasMore;
 
   async function changeUsagePage(nextPage) {
@@ -260,8 +261,8 @@ function CommunityPanel({ clients, communities, isSuperAdmin, loading, onReload,
     </section>
     {selected && <>
       <ConnectionCard title={clientName(selected)} description={communityName(communities, communityIdOf(selected))} settings={settings} account={account} connected={connected} loading={busy} onConnect={() => setConnect(true)} />
-      {connected && <BillingFacts externalBilling={detail?.externalBilling} account={account} />}
-      {detail?.externalBilling?.readError && <ReadError error={detail.externalBilling.readError} />}
+      {connected && <BillingFacts externalBilling={externalBilling} account={account} />}
+      {externalBilling?.readError && <ReadError error={externalBilling.readError} />}
       {connected && <CallUsage
         rows={callRows}
         page={usagePage}
