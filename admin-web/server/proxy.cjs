@@ -1261,6 +1261,23 @@ function providerUsageTotal(raw) {
   ) || 0;
 }
 
+function externalBillingFromPayload(payload, appClientId) {
+  if (!payload || typeof payload !== "object") return null;
+  if (payload.externalBilling) return payload.externalBilling;
+  const targetId = Number(appClientId || 0);
+  const client = (payload.clients || []).find((item) =>
+    !targetId || billingClientId(item) === targetId
+  );
+  return client && (client.externalBilling || client.external_billing) || null;
+}
+
+function normalizeExternalBillingPayload(payload, appClientId) {
+  const externalBilling = externalBillingFromPayload(payload, appClientId);
+  return externalBilling && payload && !payload.externalBilling
+    ? { ...payload, externalBilling }
+    : payload;
+}
+
 async function getPlatformAiSettings(data) {
   const requestedPage = Math.max(Number(data.page || 1), 1);
   const requestedPageSize = Math.min(Math.max(Number(data.pageSize || data.page_size || 15), 1), 100);
@@ -1305,7 +1322,8 @@ async function getPlatformAiSettings(data) {
 async function getAppClientBilling(data) {
   const requestedPage = Math.max(Number(data.page || 1), 1);
   const requestedPageSize = Math.min(Math.max(Number(data.pageSize || data.page_size || 15), 1), 500);
-  const primary = await callBusiness(businessData(data));
+  const rawPrimary = await callBusiness(businessData(data));
+  const primary = normalizeExternalBillingPayload(rawPrimary, data.appClientId);
   if (
     requestedPageSize !== 15 ||
     !data.appClientId ||
@@ -1320,13 +1338,13 @@ async function getAppClientBilling(data) {
   const firstProviderPage = Math.floor(start / providerPageSize) + 1;
   const offset = start % providerPageSize;
   const fetchCount = Math.ceil((offset + requestedPageSize + 1) / providerPageSize);
-  const responses = await Promise.all(Array.from({ length: fetchCount }, (_, index) =>
+  const responses = (await Promise.all(Array.from({ length: fetchCount }, (_, index) =>
     callBusiness(businessData({
       ...data,
       page: firstProviderPage + index,
       pageSize: providerPageSize,
     }))
-  ));
+  ))).map((item) => normalizeExternalBillingPayload(item, data.appClientId));
   const successful = responses.filter((item) => item && item.success !== false);
   if (!successful.length) return primary;
   const combined = successful.flatMap(providerUsageRows);
