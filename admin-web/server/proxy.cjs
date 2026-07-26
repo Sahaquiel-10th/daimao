@@ -532,7 +532,7 @@ async function assertAdmin(data) {
   const token = resolveAdminWebToken(data);
   if (!token) {
     const error = new Error("请先登录后台");
-    error.code = "LOGIN_REQUIRED";
+    error.code = "ADMIN_SESSION_INVALID";
     throw error;
   }
   const result = await callBusiness({ action: "adminList", adminWebToken: token });
@@ -1170,8 +1170,17 @@ function externalBillingSource(client, payload) {
 }
 
 const quickAiProviderPresets = {
+  super_relay: {
+    label: "超级中转站",
+    providerType: "relay",
+    protocol: "openai_chat",
+    billingSource: "relay",
+    defaultBaseUrl: "https://s-api.aiarrival.cn/v1",
+    rechargeUrl: "",
+  },
+  // 兼容已经打开接入弹窗、或旧版本前端仍在提交的内部值；后台界面不再暴露旧品牌。
   daimao: {
-    label: "呆猫中转站",
+    label: "超级中转站",
     providerType: "relay",
     protocol: "openai_chat",
     billingSource: "relay",
@@ -1179,7 +1188,7 @@ const quickAiProviderPresets = {
     rechargeUrl: "",
   },
   yylx_openai: {
-    label: "YYLX · OpenAI",
+    label: "其他 API 服务",
     providerType: "openai_compatible",
     protocol: "openai_chat",
     billingSource: "external",
@@ -1187,7 +1196,7 @@ const quickAiProviderPresets = {
     rechargeUrl: "https://app.yylx.io",
   },
   yylx_anthropic: {
-    label: "YYLX · Anthropic",
+    label: "其他 API 服务",
     providerType: "anthropic",
     protocol: "anthropic_messages",
     billingSource: "external",
@@ -1210,6 +1219,14 @@ const quickAiProviderPresets = {
     defaultBaseUrl: "",
     rechargeUrl: "",
   },
+  custom_auto: {
+    label: "其他 API 服务",
+    providerType: "openai_compatible",
+    protocol: "openai_chat",
+    billingSource: "external",
+    defaultBaseUrl: "",
+    rechargeUrl: "",
+  },
 };
 
 function requireBusinessSuccess(result, fallbackMessage) {
@@ -1228,11 +1245,117 @@ function quickConnectionResult(result) {
   };
 }
 
+function providerUsageRows(payload) {
+  const raw = payload && payload.externalBilling && payload.externalBilling.usage;
+  if (Array.isArray(raw)) return raw;
+  const rows = raw && (raw.items || raw.list || raw.records || raw.data);
+  return Array.isArray(rows) ? rows : [];
+}
+
+function providerUsageTotal(raw) {
+  if (!raw || Array.isArray(raw)) return 0;
+  const pagination = raw.pagination || raw.meta || {};
+  return Number(
+    pagination.total ?? pagination.totalCount ?? pagination.total_count ??
+    raw.total ?? raw.totalCount ?? raw.total_count ?? 0
+  ) || 0;
+}
+
+async function getPlatformAiSettings(data) {
+  const requestedPage = Math.max(Number(data.page || 1), 1);
+  const requestedPageSize = Math.min(Math.max(Number(data.pageSize || data.page_size || 15), 1), 100);
+  if (requestedPageSize !== 15) return callBusiness(businessData(data));
+
+  // 数据中心对上游 /usage 的兼容读取以 10 条为基础。这里跨页拼成后台统一的 15 条，
+  // 不要求已经上线的中转站同时修改分页规则。
+  const providerPageSize = 10;
+  const start = (requestedPage - 1) * requestedPageSize;
+  const firstProviderPage = Math.floor(start / providerPageSize) + 1;
+  const offset = start % providerPageSize;
+  const fetchCount = Math.ceil((offset + requestedPageSize + 1) / providerPageSize);
+  const responses = await Promise.all(Array.from({ length: fetchCount }, (_, index) =>
+    callBusiness(businessData({
+      ...data,
+      page: firstProviderPage + index,
+      pageSize: providerPageSize,
+    }))
+  ));
+  const failed = responses.find((item) => !item || item.success === false);
+  if (failed) return failed;
+  const primary = responses[0];
+  const combined = responses.flatMap(providerUsageRows);
+  const rows = combined.slice(offset, offset + requestedPageSize);
+  const rawUsage = primary && primary.externalBilling && primary.externalBilling.usage;
+  const total = providerUsageTotal(rawUsage);
+  const totalPages = total ? Math.max(1, Math.ceil(total / requestedPageSize)) : 0;
+  const hasMore = total ? requestedPage < totalPages : combined.length > offset + requestedPageSize;
+  if (!primary || !primary.externalBilling || !rawUsage) return primary;
+  return {
+    ...primary,
+    externalBilling: {
+      ...primary.externalBilling,
+      usage: {
+        items: rows,
+        pagination: { page: requestedPage, pageSize: requestedPageSize, total, totalPages, hasMore },
+      },
+    },
+  };
+}
+
+async function getAppClientBilling(data) {
+  const requestedPage = Math.max(Number(data.page || 1), 1);
+  const requestedPageSize = Math.min(Math.max(Number(data.pageSize || data.page_size || 15), 1), 500);
+  const primary = await callBusiness(businessData(data));
+  if (
+    requestedPageSize !== 15 ||
+    !data.appClientId ||
+    !primary ||
+    primary.success === false ||
+    !primary.externalBilling ||
+    !primary.externalBilling.usage
+  ) return primary;
+
+  const providerPageSize = 10;
+  const start = (requestedPage - 1) * requestedPageSize;
+  const firstProviderPage = Math.floor(start / providerPageSize) + 1;
+  const offset = start % providerPageSize;
+  const fetchCount = Math.ceil((offset + requestedPageSize + 1) / providerPageSize);
+  const responses = await Promise.all(Array.from({ length: fetchCount }, (_, index) =>
+    callBusiness(businessData({
+      ...data,
+      page: firstProviderPage + index,
+      pageSize: providerPageSize,
+    }))
+  ));
+  const successful = responses.filter((item) => item && item.success !== false);
+  if (!successful.length) return primary;
+  const combined = successful.flatMap(providerUsageRows);
+  const rows = combined.slice(offset, offset + requestedPageSize);
+  const rawUsage = successful[0].externalBilling && successful[0].externalBilling.usage;
+  const total = providerUsageTotal(rawUsage);
+  const totalPages = total ? Math.max(1, Math.ceil(total / requestedPageSize)) : 0;
+  const hasMore = total ? requestedPage < totalPages : combined.length > offset + requestedPageSize;
+  return {
+    ...primary,
+    externalBilling: {
+      ...primary.externalBilling,
+      usage: {
+        items: rows,
+        pagination: { page: requestedPage, pageSize: requestedPageSize, total, totalPages, hasMore },
+      },
+    },
+  };
+}
+
 async function adminQuickConnectAi(data) {
   await assertAdmin(data);
   const session = sessionFromData(data);
+  const authenticatedBusinessData = (payload) => businessData({
+    ...payload,
+    adminSessionToken: data.adminSessionToken,
+  });
   const scope = data.scope === "platform" ? "platform" : "community";
-  const presetKey = String(data.providerPreset || "daimao");
+  const presetKey = String(data.providerPreset || "super_relay");
   const preset = quickAiProviderPresets[presetKey];
   if (!preset) throw Object.assign(new Error("不支持这个供应商预设"), { code: "VALIDATION_ERROR" });
   const model = text(data.model, 160);
@@ -1241,9 +1364,17 @@ async function adminQuickConnectAi(data) {
   if (!model) throw Object.assign(new Error("请填写供应商控制台中的精确模型 ID"), { code: "AI_MODEL_NOT_CONFIGURED" });
   if (!apiKey) throw Object.assign(new Error("请粘贴供应商 API Key"), { code: "AI_PROVIDER_ACCOUNT_REQUIRED" });
   if (!baseUrl) throw Object.assign(new Error("请填写 Base URL"), { code: "VALIDATION_ERROR" });
-  const protocol = presetKey === "daimao" && /^claude(?:[-_.]|$)/i.test(model)
-    ? "anthropic_messages"
-    : preset.protocol;
+  const requestedProtocol = String(data.protocolPreference || data.protocol || "auto");
+  if (!["auto", "openai_chat", "anthropic_messages"].includes(requestedProtocol)) {
+    throw Object.assign(new Error("接口格式只能选择自动、OpenAI Chat 或 Anthropic Messages"), { code: "VALIDATION_ERROR" });
+  }
+  const autoProtocol = /^claude(?:[-_.]|$)/i.test(model) ? "anthropic_messages" : "openai_chat";
+  const protocol = requestedProtocol === "auto"
+    ? (["super_relay", "daimao", "custom_auto"].includes(presetKey) ? autoProtocol : preset.protocol)
+    : requestedProtocol;
+  const providerType = preset.providerType === "relay"
+    ? "relay"
+    : protocol === "anthropic_messages" ? "anthropic" : "openai_compatible";
 
   let appClient = null;
   let communityId = null;
@@ -1259,13 +1390,13 @@ async function adminQuickConnectAi(data) {
   }
 
   const suffix = `${new Date().toISOString().slice(0, 16).replace(/[-T:]/g, "")}-${apiKey.slice(-4)}`;
-  const accountResult = requireBusinessSuccess(await callBusiness(businessData({
+  const accountResult = requireBusinessSuccess(await callBusiness(authenticatedBusinessData({
     action: "adminUpsertAiProviderAccount",
     account: {
       accountScope: scope,
       ...(communityId ? { communityId } : {}),
       name: `${contextLabel} · ${preset.label} · ${model} · ${suffix}`.slice(0, 120),
-      providerType: preset.providerType,
+      providerType,
       protocol,
       baseUrl,
       apiKey,
@@ -1287,14 +1418,14 @@ async function adminQuickConnectAi(data) {
     note: `${preset.label} 快速接入`,
   };
   const routeResult = scope === "platform"
-    ? requireBusinessSuccess(await callBusiness(businessData({ action: "adminUpdatePlatformAiSettings", settings })), "平台线路绑定失败")
-    : requireBusinessSuccess(await callBusiness(businessData({ action: "adminUpdateAppClientBillingSettings", appClientId: billingClientId(appClient), settings })), "社区线路绑定失败");
+    ? requireBusinessSuccess(await callBusiness(authenticatedBusinessData({ action: "adminUpdatePlatformAiSettings", settings })), "平台线路绑定失败")
+    : requireBusinessSuccess(await callBusiness(authenticatedBusinessData({ action: "adminUpdateAppClientBillingSettings", appClientId: billingClientId(appClient), settings })), "社区线路绑定失败");
 
   let connection;
   try {
     const testResult = scope === "platform"
-      ? await callBusiness(businessData({ action: "adminCheckPlatformAiConnection" }))
-      : await callBusiness(businessData({
+      ? await callBusiness(authenticatedBusinessData({ action: "adminCheckPlatformAiConnection" }))
+      : await callBusiness(authenticatedBusinessData({
           action: "adminTestAppClientAiBilling",
           appClientId: billingClientId(appClient),
           idempotencyKey: crypto.randomUUID(),
@@ -1372,10 +1503,10 @@ async function getCommunityBilling(data, session) {
     error.code = "FORBIDDEN";
     throw error;
   }
-  const responses = await Promise.all(targets.map((client) => callBusiness(businessData({
+  const responses = await Promise.all(targets.map((client) => getAppClientBilling({
     ...data,
     appClientId: Number(client.id ?? client.appClientId ?? client.app_client_id),
-  }))));
+  })));
   const usageEvents = responses.flatMap((item) => item.usageEvents || []);
   const walletLedger = responses.flatMap((item) => item.walletLedger || []);
   const rechargeOrders = responses.flatMap((item) => item.rechargeOrders || []);
@@ -1430,6 +1561,7 @@ async function listProviderAccountsForCommunity(data, session) {
 
 async function getScopedBillingClient(data, appClientId) {
   const result = await callBusiness(businessData({
+    adminSessionToken: data.adminSessionToken,
     action: "adminGetAppClientBilling",
     appClientId: id(appClientId, "appClientId"),
     page: 1,
@@ -1452,6 +1584,7 @@ async function assertAppClientAccess(data, appClientId) {
 
 async function assertCommunityProviderAccount(data, accountId, communityId) {
   const result = await callBusiness(businessData({
+    adminSessionToken: data.adminSessionToken,
     action: "adminListAiProviderAccounts",
     accountScope: "community",
     communityId,
@@ -1483,7 +1616,11 @@ async function upsertScopedProviderAccount(data) {
   const account = { ...(data.account || {}) };
   if (session.role === "super_admin" && String(account.accountScope || account.account_scope) === "platform") {
     if (providerAccountId(account)) {
-      const existing = await callBusiness(businessData({ action: "adminListAiProviderAccounts", accountScope: "platform" }));
+      const existing = await callBusiness(businessData({
+        adminSessionToken: data.adminSessionToken,
+        action: "adminListAiProviderAccounts",
+        accountScope: "platform",
+      }));
       if (!existing || !existing.success) return existing;
       if (!providerAccountsFrom(existing).some((item) => providerAccountId(item) === providerAccountId(account) && providerAccountScope(item) === "platform")) {
         throw Object.assign(new Error("不能把社区账户作为平台账户修改"), { code: "AI_PROVIDER_SCOPE_MISMATCH" });
@@ -1526,6 +1663,9 @@ async function adminProxyAction(data) {
   if (data.action === "adminQuickConnectAi") return adminQuickConnectAi(data);
   if (platformAiActions.has(data.action)) {
     requireSuperAdmin(data);
+    if (data.action === "adminGetPlatformAiSettings") {
+      return sanitizeAiPayload(await getPlatformAiSettings(data));
+    }
     return sanitizeAiPayload(await callBusiness(businessData(data)));
   }
   if (data.action === "adminListAiProviderAccounts") {
@@ -1557,7 +1697,7 @@ async function adminProxyAction(data) {
     await assertAdmin(data);
     const session = sessionFromData(data);
     if (session && session.role === "community_admin") return sanitizeAiPayload(await getCommunityBilling(data, session));
-    return sanitizeAiPayload(await callBusiness(businessData(data)));
+    return sanitizeAiPayload(await getAppClientBilling(data));
   }
   if (data.action === "adminList") {
     await assertAdmin(data);
