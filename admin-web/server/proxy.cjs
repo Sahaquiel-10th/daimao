@@ -321,7 +321,7 @@ function fileExtension(filename, contentType) {
 }
 
 function safeAssetKind(value) {
-  return ["project-cover", "event-cover", "community-logo", "user-avatar"].includes(value) ? value : "misc";
+  return ["project-cover", "event-cover", "community-logo", "user-avatar", "skill-avatar"].includes(value) ? value : "misc";
 }
 
 async function callBusiness(data) {
@@ -646,6 +646,7 @@ async function addAssetDisplayUrls(payload) {
   (payload.communities || []).forEach((item) => push(item.logo_url));
   (payload.projects || []).forEach((item) => push(item.cover_url));
   (payload.events || []).forEach((item) => push(item.cover_url));
+  (payload.skillBounties || []).forEach((item) => push(item.avatar_url));
   if (!fileIds.length) return payload;
   let urlMap = new Map();
   try {
@@ -665,6 +666,7 @@ async function addAssetDisplayUrls(payload) {
     communities: (payload.communities || []).map((item) => ({ ...item, logo_display_url: display(item.logo_url) })),
     projects: (payload.projects || []).map((item) => ({ ...item, cover_display_url: display(item.cover_url) })),
     events: (payload.events || []).map((item) => ({ ...item, cover_display_url: display(item.cover_url) })),
+    skillBounties: (payload.skillBounties || []).map((item) => ({ ...item, avatar_display_url: display(item.avatar_url) })),
   };
 }
 
@@ -1673,6 +1675,19 @@ async function rejectExternalWalletMutation(data) {
 }
 
 async function adminProxyAction(data) {
+  const skillAdminActions = new Set([
+    "adminListSkillBounties",
+    "adminUpsertSkillBounty",
+    "adminListSkillBountyApplications",
+    "adminUpdateSkillBountyApplication",
+  ]);
+  if (skillAdminActions.has(data.action)) {
+    requireSuperAdmin(data);
+    const result = await callBusiness(businessData(data));
+    return data.action === "adminListSkillBounties" && result?.success
+      ? addAssetDisplayUrls(result)
+      : result;
+  }
   const platformAiActions = new Set([
     "adminGetPlatformAiSettings",
     "adminUpdatePlatformAiSettings",
@@ -1799,6 +1814,7 @@ async function login(data) {
 
 async function adminUploadAsset(data) {
   await assertAdmin(data);
+  if (data.kind === "skill-avatar") requireSuperAdmin(data);
   let contentType = data.contentType;
   let fileContent = data.fileContent;
   if (!fileContent) {

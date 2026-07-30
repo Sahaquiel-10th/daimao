@@ -1190,6 +1190,238 @@ button:disabled {
 .advanced-accounts[open] summary { border-bottom: 1px solid #eee9e1; }
 .simple-client-picker { padding: 0; }
 .empty-client-setup { display: grid; justify-items: center; gap: 12px; padding: 0 20px 22px; }
+
+.skill-admin-page {
+  gap: 20px;
+}
+
+.skill-message,
+.skill-success-message {
+  padding: 12px 16px;
+  border-radius: 14px;
+  font-weight: 700;
+}
+
+.skill-success-message {
+  color: #176b43;
+  background: #eaf8f0;
+  border: 1px solid #bce7ce;
+}
+
+.skill-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.skill-summary-grid > div {
+  display: grid;
+  gap: 5px;
+  padding: 16px;
+  border: 1px solid #e7e1d8;
+  border-radius: 16px;
+  background: #fbfaf7;
+}
+
+.skill-summary-grid span,
+.skill-cell-note,
+.skill-application-detail small {
+  color: #756f67;
+  font-size: 12px;
+}
+
+.skill-summary-grid strong {
+  font-size: 26px;
+}
+
+.skill-person-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 150px;
+}
+
+.skill-person-cell > img,
+.skill-person-cell > span {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: grid;
+  place-items: center;
+  background: #f1ede6;
+  flex: 0 0 auto;
+}
+
+.skill-person-cell > div,
+.skill-person-cell td,
+.skill-application-detail > div {
+  display: grid;
+  gap: 3px;
+}
+
+.skill-cell-note {
+  display: block;
+  margin-top: 4px;
+}
+
+.skill-status {
+  display: inline-flex;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  color: #4d4943;
+  background: #efede8;
+}
+
+.skill-status-available { color: #176b43; background: #e4f7ec; }
+.skill-status-idle { color: #155b76; background: #e2f3f9; }
+.skill-status-busy { color: #963d24; background: #ffebe4; }
+.skill-status-resting { color: #6d6179; background: #f0eaf6; }
+
+.skill-filter {
+  display: grid;
+  gap: 5px;
+  min-width: 190px;
+}
+
+.skill-filter span {
+  font-size: 12px;
+  color: #756f67;
+}
+
+.skill-summary-text {
+  display: -webkit-box;
+  max-width: 300px;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.skill-contact-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-contact-cell code {
+  color: #111;
+  font-weight: 800;
+}
+
+.skill-row-new {
+  background: #fff9e9;
+}
+
+.skill-form {
+  display: grid;
+  gap: 18px;
+}
+
+.skill-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+
+.skill-form-grid label,
+.skill-avatar-upload {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.skill-form-grid label > span {
+  color: #5d574f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.skill-form-wide {
+  grid-column: 1 / -1;
+}
+
+.skill-avatar-upload > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.skill-avatar-upload img,
+.skill-avatar-upload b {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: grid;
+  place-items: center;
+  background: #f1ede6;
+  font-size: 24px;
+}
+
+.skill-form-actions {
+  justify-content: flex-end;
+}
+
+.skill-application-detail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.skill-application-detail > div {
+  padding: 14px;
+  border: 1px solid #e7e1d8;
+  border-radius: 14px;
+  background: #fbfaf7;
+}
+
+.skill-application-detail span {
+  color: #756f67;
+  font-size: 12px;
+}
+
+.skill-application-detail p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  line-height: 1.7;
+}
+
+.skill-detail-wide {
+  grid-column: 1 / -1;
+}
+
+.skill-contact-highlight {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff2c9;
+}
+
+.skill-contact-highlight code {
+  color: #111;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+@media (max-width: 900px) {
+  .skill-summary-grid,
+  .skill-form-grid,
+  .skill-application-detail {
+    grid-template-columns: 1fr;
+  }
+
+  .skill-form-wide,
+  .skill-detail-wide {
+    grid-column: auto;
+  }
+}
 .immutable-hint { grid-column: 1 / -1; margin: 0; padding: 10px 12px; border: 2px solid #23211f; border-radius: 10px; background: #d7e8ff; color: #3e5269; font-size: 12px; font-weight: 800; }
 
 .pricing-page { display: grid; gap: 18px; max-width: 1380px; margin: 0 auto; }

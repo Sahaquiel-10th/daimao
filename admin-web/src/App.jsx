@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Building2,
+  Briefcase,
   CalendarDays,
   CheckCircle2,
   Database,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import { callAdmin, hasToken, loginAdmin, saveAccessKey, saveToken, uploadAsset } from "./api";
 import BillingPage from "./Billing";
+import SkillBountyPage from "./SkillBounties";
 import opcLogo from "./assets/opc-data-center-logo.svg";
 
 const tabs = [
@@ -28,6 +30,7 @@ const tabs = [
   { key: "communities", label: "社区", icon: Building2 },
   { key: "projects", label: "项目", icon: Database },
   { key: "events", label: "活动", icon: CalendarDays },
+  { key: "skills", label: "技能悬赏", icon: Briefcase, superOnly: true },
   { key: "pending", label: "待处理", icon: CheckCircle2 },
   { key: "experience", label: "经验", icon: Star, superOnly: true },
   { key: "billing", label: "AI 计费", icon: Zap },
@@ -1361,6 +1364,10 @@ export default function App() {
               </Modal>
             )}
           </section>
+        )}
+
+        {activeTab === "skills" && (
+          <SkillBountyPage users={data?.users || []} />
         )}
 
         {activeTab === "pending" && (
