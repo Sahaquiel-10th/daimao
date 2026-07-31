@@ -552,11 +552,13 @@ function businessData(data) {
 }
 
 async function enrichAdminList(payload) {
-  const [allUsers, allProjects, allEvents, allAdminLogs] = await Promise.all([
+  const [allUsers, allProjects, allEvents, allAdminLogs, allStickerOrders, allEnterpriseLeads] = await Promise.all([
     rdbSelectAll("users", "id,openid,public_user_code,display_name,avatar_url,status,is_admin,experience_points,created_at,updated_at", "created_at").catch(() => []),
     rdbSelectAll("projects", "*", "updated_at", { maxRows: 5000 }).catch(() => []),
     rdbSelectAll("official_events", "*", "start_time", { maxRows: 5000 }).catch(() => []),
     rdbSelectAll("admin_logs", "*", "created_at", { maxRows: 2000 }).catch(() => []),
+    rdbSelectAll("sticker_orders", "*", "paid_at", { maxRows: 10000 }).catch(() => []),
+    rdbSelectAll("enterprise_customization_leads", "*", "created_at", { maxRows: 10000 }).catch(() => []),
   ]);
   payload = {
     ...payload,
@@ -564,6 +566,14 @@ async function enrichAdminList(payload) {
     projects: allProjects.length ? allProjects.map((item) => ({ ...item, tags: parseJson(item.tags_json, []) })) : (payload.projects || []),
     events: allEvents.length ? allEvents : (payload.events || []),
     adminLogs: allAdminLogs.length ? allAdminLogs : (payload.adminLogs || []),
+    stickerOrders: allStickerOrders
+      .filter((item) => ["paid", "refunding", "refunded"].includes(item.payment_status))
+      .map((item) => ({
+        ...item,
+        items: parseJson(item.items_json, []),
+        pricingSnapshot: parseJson(item.pricing_snapshot_json, {}),
+      })),
+    enterpriseCustomizationLeads: allEnterpriseLeads,
   };
   const userIds = (payload.users || []).map((item) => Number(item.id)).filter(Boolean);
   const [communities, memberships, profiles, projectMembers, projectRecords, experienceEvents, referrals, experienceRules] = await Promise.all([
@@ -716,7 +726,94 @@ function applyAdminScope(payload, session) {
     ragSources,
     ragIndexJobs,
     adminLogs: [],
+    stickerOrders: [],
+    enterpriseCustomizationLeads: [],
   };
+}
+
+async function writeCommerceAdminLog(session, action, targetType, targetId, detail) {
+  await rdbInsert("admin_logs", {
+    admin_user_id: Number(session.accountId || 0),
+    action,
+    target_type: targetType,
+    target_id: Number(targetId || 0) || null,
+    detail_json: JSON.stringify(detail || {}),
+  }).catch((err) => console.warn("写入电商后台审计日志失败", err.message));
+}
+
+async function adminUpdateStickerOrder(data) {
+  const session = requireSuperAdmin(data);
+  const orderId = id(data.orderId, "orderId");
+  const rows = await rdbSelect("sticker_orders", "*", (request) => request.eq("id", orderId).limit(1));
+  const order = rows[0];
+  if (!order || !["paid", "refunding", "refunded"].includes(order.payment_status)) {
+    throw Object.assign(new Error("找不到已支付订单"), { code: "NOT_FOUND" });
+  }
+  const patch = data.patch || {};
+  const values = {};
+  const fulfillmentStatuses = new Set(["pending", "preparing", "shipped", "delivered", "cancelled", "exception"]);
+  if (patch.fulfillmentStatus !== undefined) {
+    if (!fulfillmentStatuses.has(patch.fulfillmentStatus)) {
+      throw Object.assign(new Error("履约状态不正确"), { code: "VALIDATION_ERROR" });
+    }
+    values.fulfillment_status = patch.fulfillmentStatus;
+    if (patch.fulfillmentStatus === "shipped" && !order.shipped_at) values.shipped_at = new Date().toISOString();
+    if (patch.fulfillmentStatus === "delivered" && !order.delivered_at) values.delivered_at = new Date().toISOString();
+  }
+  if (patch.paymentStatus !== undefined) {
+    if (!["paid", "refunding", "refunded"].includes(patch.paymentStatus)) {
+      throw Object.assign(new Error("后台只能维护退款相关支付状态"), { code: "VALIDATION_ERROR" });
+    }
+    values.payment_status = patch.paymentStatus;
+  }
+  if (patch.shippingCarrier !== undefined) values.shipping_carrier = text(patch.shippingCarrier, 80);
+  if (patch.trackingNo !== undefined) values.tracking_no = text(patch.trackingNo, 120);
+  if (patch.internalNote !== undefined) values.internal_note = text(patch.internalNote, 5000);
+  const nextFulfillmentStatus = values.fulfillment_status || order.fulfillment_status;
+  const nextShippingCarrier = values.shipping_carrier !== undefined ? values.shipping_carrier : order.shipping_carrier;
+  const nextTrackingNo = values.tracking_no !== undefined ? values.tracking_no : order.tracking_no;
+  if (["shipped", "delivered"].includes(nextFulfillmentStatus) && (!nextShippingCarrier || !nextTrackingNo)) {
+    throw Object.assign(new Error("标记已发货或已完成前，请填写物流公司和物流单号"), { code: "VALIDATION_ERROR" });
+  }
+  if (values.payment_status === "refunded" && !values.fulfillment_status) values.fulfillment_status = "cancelled";
+  if (!Object.keys(values).length) return { success: true, saved: false };
+  await rdbUpdate("sticker_orders", values, (request) => request.eq("id", orderId));
+  await writeCommerceAdminLog(session, "update_sticker_order", "sticker_order", orderId, values);
+  return { success: true, saved: true };
+}
+
+async function adminUpdateEnterpriseCustomizationLead(data) {
+  const session = requireSuperAdmin(data);
+  const leadId = id(data.leadId, "leadId");
+  const rows = await rdbSelect(
+    "enterprise_customization_leads",
+    "id,lead_status,contacted_at",
+    (request) => request.eq("id", leadId).limit(1)
+  );
+  const lead = rows[0];
+  if (!lead) throw Object.assign(new Error("企业线索不存在"), { code: "NOT_FOUND" });
+  const patch = data.patch || {};
+  const values = {};
+  const statuses = new Set(["new", "contacting", "qualified", "quoted", "won", "lost", "invalid"]);
+  if (patch.leadStatus !== undefined) {
+    if (!statuses.has(patch.leadStatus)) {
+      throw Object.assign(new Error("线索状态不正确"), { code: "VALIDATION_ERROR" });
+    }
+    values.lead_status = patch.leadStatus;
+    if (patch.leadStatus === "contacting" && !lead.contacted_at) values.contacted_at = new Date().toISOString();
+  }
+  if (patch.assignedTo !== undefined) values.assigned_to = text(patch.assignedTo, 80);
+  if (patch.nextFollowUpAt !== undefined) {
+    if (patch.nextFollowUpAt && Number.isNaN(new Date(patch.nextFollowUpAt).getTime())) {
+      throw Object.assign(new Error("下次跟进时间不正确"), { code: "VALIDATION_ERROR" });
+    }
+    values.next_follow_up_at = patch.nextFollowUpAt || null;
+  }
+  if (patch.internalNote !== undefined) values.internal_note = text(patch.internalNote, 5000);
+  if (!Object.keys(values).length) return { success: true, saved: false };
+  await rdbUpdate("enterprise_customization_leads", values, (request) => request.eq("id", leadId));
+  await writeCommerceAdminLog(session, "update_enterprise_customization_lead", "enterprise_customization_lead", leadId, values);
+  return { success: true, saved: true };
 }
 
 async function adminUpdateUser(data) {
@@ -1755,6 +1852,14 @@ async function adminProxyAction(data) {
   if (data.action === "adminUpsertExperienceRule") {
     await assertAdmin(data);
     return adminUpsertExperienceRule(data);
+  }
+  if (data.action === "adminUpdateStickerOrder") {
+    await assertAdmin(data);
+    return adminUpdateStickerOrder(data);
+  }
+  if (data.action === "adminUpdateEnterpriseCustomizationLead") {
+    await assertAdmin(data);
+    return adminUpdateEnterpriseCustomizationLead(data);
   }
   if (["adminUpdateUser", "adminDeleteUser", "adminSaveUserCommunity", "adminRevokeUserCommunity", "adminUpdateCommunity", "adminSetUserReferral"].includes(data.action)) {
     await assertAdmin(data);
