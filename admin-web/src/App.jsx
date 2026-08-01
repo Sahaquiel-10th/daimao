@@ -81,9 +81,13 @@ function emptyProjectDraft(defaultCommunityId = "") {
 
 function formatDate(value) {
   if (!value) return "-";
-  const date = new Date(value);
+  const raw = String(value).trim();
+  const sqlMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  const date = new Date(sqlMatch
+    ? `${sqlMatch[1]}-${sqlMatch[2]}-${sqlMatch[3]}T${sqlMatch[4]}:${sqlMatch[5]}:${sqlMatch[6]}+08:00`
+    : value);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return date.toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" });
 }
 
 function dateInputValue(value) {

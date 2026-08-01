@@ -18,6 +18,25 @@ const adminWebToken = process.env.ADMIN_WEB_TOKEN || "";
 const sessionSecret = process.env.ADMIN_SESSION_SECRET || adminWebToken || secretKey || "";
 const passwordHashIterations = Number(process.env.ADMIN_PASSWORD_HASH_ITERATIONS || 120000);
 
+function sqlDateTime(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(safeDate).reduce((map, part) => {
+    if (part.type !== "literal") map[part.type] = part.value;
+    return map;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
 let app;
 let rdbClient;
 
@@ -757,8 +776,8 @@ async function adminUpdateStickerOrder(data) {
       throw Object.assign(new Error("履约状态不正确"), { code: "VALIDATION_ERROR" });
     }
     values.fulfillment_status = patch.fulfillmentStatus;
-    if (patch.fulfillmentStatus === "shipped" && !order.shipped_at) values.shipped_at = new Date().toISOString();
-    if (patch.fulfillmentStatus === "delivered" && !order.delivered_at) values.delivered_at = new Date().toISOString();
+    if (patch.fulfillmentStatus === "shipped" && !order.shipped_at) values.shipped_at = sqlDateTime();
+    if (patch.fulfillmentStatus === "delivered" && !order.delivered_at) values.delivered_at = sqlDateTime();
   }
   if (patch.paymentStatus !== undefined) {
     if (!["paid", "refunding", "refunded"].includes(patch.paymentStatus)) {
@@ -800,7 +819,7 @@ async function adminUpdateEnterpriseCustomizationLead(data) {
       throw Object.assign(new Error("线索状态不正确"), { code: "VALIDATION_ERROR" });
     }
     values.lead_status = patch.leadStatus;
-    if (patch.leadStatus === "contacting" && !lead.contacted_at) values.contacted_at = new Date().toISOString();
+    if (patch.leadStatus === "contacting" && !lead.contacted_at) values.contacted_at = sqlDateTime();
   }
   if (patch.assignedTo !== undefined) values.assigned_to = text(patch.assignedTo, 80);
   if (patch.nextFollowUpAt !== undefined) {
