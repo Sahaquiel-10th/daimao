@@ -776,7 +776,7 @@ async function adminUpdateStickerOrder(data) {
       throw Object.assign(new Error("履约状态不正确"), { code: "VALIDATION_ERROR" });
     }
     values.fulfillment_status = patch.fulfillmentStatus;
-    if (patch.fulfillmentStatus === "shipped" && !order.shipped_at) values.shipped_at = sqlDateTime();
+    if (["shipped", "delivered"].includes(patch.fulfillmentStatus) && !order.shipped_at) values.shipped_at = sqlDateTime();
     if (patch.fulfillmentStatus === "delivered" && !order.delivered_at) values.delivered_at = sqlDateTime();
   }
   if (patch.paymentStatus !== undefined) {
