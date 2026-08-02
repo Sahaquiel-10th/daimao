@@ -34,7 +34,7 @@ const tabs = [
   { key: "projects", label: "项目", icon: Database },
   { key: "events", label: "活动", icon: CalendarDays },
   { key: "skills", label: "技能悬赏", icon: Briefcase, superOnly: true },
-  { key: "sticker-orders", label: "贴纸订单", icon: Package, superOnly: true },
+  { key: "sticker-orders", label: "呆猫碰碰订单", icon: Package, superOnly: true },
   { key: "enterprise-leads", label: "企业定制", icon: Handshake, superOnly: true },
   { key: "pending", label: "待处理", icon: CheckCircle2 },
   { key: "experience", label: "经验", icon: Star, superOnly: true },

@@ -22,9 +22,9 @@ const leadStatusLabels = {
 };
 
 const customizationLabels = {
-  logo_keychain: "Logo 钥匙扣",
+  logo_keychain: "Logo 名片挂件",
   mini_program: "整套小程序",
-  both: "钥匙扣 + 小程序",
+  both: "名片挂件 + 小程序",
 };
 
 const entrySourceLabels = {
@@ -39,9 +39,13 @@ const entrySourceLabels = {
 
 function formatDate(value) {
   if (!value) return "-";
-  const date = new Date(value);
+  const raw = String(value).trim();
+  const sqlMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  const date = new Date(sqlMatch
+    ? `${sqlMatch[1]}-${sqlMatch[2]}-${sqlMatch[3]}T${sqlMatch[4]}:${sqlMatch[5]}:${sqlMatch[6]}+08:00`
+    : value);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return date.toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" });
 }
 
 function dateInputValue(value) {
@@ -179,7 +183,7 @@ export function StickerOrdersPage({ orders = [], onChanged, notify }) {
     <section className="content-grid">
       <section className="panel dm-card">
         <div className="commerce-heading">
-          <div><h3>呆猫贴订单</h3><p>只有微信支付成功的订单会进入这里；待付款记录不会进入发货队列。</p></div>
+          <div><h3>呆猫碰碰订单</h3><p>只有微信支付成功的订单会进入这里；待付款记录不会进入发货队列。</p></div>
           <div className="commerce-count"><strong>{filtered.length}</strong><span>笔订单</span></div>
         </div>
         <Toolbar
@@ -197,7 +201,7 @@ export function StickerOrdersPage({ orders = [], onChanged, notify }) {
             ["cancelled", "已取消"],
             ["all", "全部已付款"],
           ]}
-          onDownload={() => downloadCsv(`呆猫贴已付款订单-${new Date().toISOString().slice(0, 10)}.csv`, [
+          onDownload={() => downloadCsv(`呆猫碰碰已付款订单-${new Date().toISOString().slice(0, 10)}.csv`, [
             { label: "订单号", value: (item) => item.order_no },
             { label: "付款时间", value: (item) => formatDate(item.paid_at) },
             { label: "生肖明细", value: orderItemsLabel },
