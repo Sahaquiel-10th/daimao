@@ -2292,7 +2292,7 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
     .filter((item) => !memberIds.has(Number(item.id)))
     .filter((item) => !normalizedKeyword || searchableUserText(item).includes(normalizedKeyword))
     .slice(0, normalizedKeyword ? 30 : 8);
-  const activeMembers = members.filter((item) => item.status !== "removed" && item.status !== "left" && item.status !== "rejected");
+  const activeMembers = members.filter((item) => item.status === "active");
 
   async function withActionStatus(key, runner) {
     setActionStatus((next) => ({ ...next, [key]: "saving" }));
@@ -2378,11 +2378,15 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
         reviewedUserId: userId,
         ...item,
       }));
+    const taskExperienceUserIds = activeMembers
+      .filter((member) => completionDraft.memberReviews[member.user_id]?.completeTaskExperience !== false)
+      .map((member) => member.user_id);
     const ok = await withActionStatus("complete", () => onComplete({
       projectId,
       summary: completionDraft.summary,
       visibility: completionDraft.visibility,
       memberReviews,
+      taskExperienceUserIds,
     }));
     if (ok) setCompletionDraft({ summary: "", visibility: "project_members", memberReviews: {} });
   }
@@ -2575,7 +2579,7 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
       {activeTab === "complete" && <section className="management-section danger-light">
         <div className="section-title-row">
           <h4>项目完结</h4>
-          <span className="muted">总结会写入项目动态；填写成员评价后自动入 RAG 证据链。</span>
+          <span className="muted">总结会写入项目动态；active 成员默认发放任务完成经验，填写评价后自动入 RAG 证据链。</span>
         </div>
         <Field label="完结总结">
           <textarea value={completionDraft.summary} onChange={(event) => setCompletionDraft({ ...completionDraft, summary: event.target.value })} placeholder="项目目标、交付结果、关键过程、后续建议。" />
@@ -2592,6 +2596,14 @@ function ProjectManagementPanel({ data, users = [], communities = [], onReload, 
             return (
               <div className="completion-review-card" key={member.user_id}>
                 <ProjectUserLabel user={member.user} />
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={draft.completeTaskExperience !== false}
+                    onChange={(event) => updateCompletionReview(member.user_id, { completeTaskExperience: event.target.checked })}
+                  />
+                  <span>结案时发放“完成一次项目任务”经验（默认发放）</span>
+                </label>
                 <Field label="完结贡献评价">
                   <textarea
                     value={draft.contributionText || ""}
