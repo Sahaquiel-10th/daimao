@@ -232,19 +232,18 @@ const communityAccounts = parseCommunityAccounts();
 
 const defaultExperienceRules = [
   { rule_key: "register_profile", label: "注册并保存名片", description: "首次完成名片资料。", points: 10, status: "active", sort_order: 10 },
-  { rule_key: "card_viewed_by_other", label: "有人碰你的名片", description: "别人通过 NFC 或分享打开并保存你的名片。", points: 2, status: "active", sort_order: 20 },
-  { rule_key: "view_other_card", label: "你碰别人的名片", description: "你主动打开并保存别人的名片。", points: 1, status: "active", sort_order: 30 },
-  { rule_key: "share_card", label: "分享自己的名片", description: "分享 OPC 数据中心名片。", points: 1, status: "active", sort_order: 40 },
+  { rule_key: "card_viewed_by_other", label: "有人碰你的名片", description: "一位新用户首次打开你的名片，同一用户仅计一次。", points: 2, status: "active", sort_order: 20 },
+  { rule_key: "view_other_card", label: "你碰别人的名片", description: "你首次打开一位新用户的名片，同一用户仅计一次。", points: 1, status: "active", sort_order: 30 },
+  { rule_key: "share_card", label: "分享自己的名片", description: "分享的名片被一位新用户首次打开，同一用户仅计一次。", points: 1, status: "active", sort_order: 40 },
   { rule_key: "watch_project", label: "围观项目", description: "首次围观一个项目。", points: 1, status: "active", sort_order: 50 },
   { rule_key: "apply_project", label: "提交项目申请", description: "提交一次有效项目申请。", points: 3, status: "active", sort_order: 60 },
-  { rule_key: "join_project", label: "被项目接受参与", description: "项目主理人接受申请。", points: 20, status: "active", sort_order: 70 },
-  { rule_key: "complete_project_task", label: "完成一次项目任务", description: "项目主理人确认任务完成。", points: 15, status: "active", sort_order: 80 },
-  { rule_key: "project_completed_member", label: "参与项目顺利完成", description: "作为成员参与并完成项目。", points: 50, status: "active", sort_order: 90 },
-  { rule_key: "project_completed_lead", label: "主理项目顺利完成", description: "作为主理人完成项目。", points: 120, status: "active", sort_order: 100 },
-  { rule_key: "attend_event", label: "参加一次活动", description: "活动签到或管理员确认。", points: 8, status: "active", sort_order: 110 },
-  { rule_key: "pass_review", label: "通过社区认证", description: "获得任一社区认证徽章。", points: 30, status: "active", sort_order: 120 },
-  { rule_key: "host_event", label: "协助组织活动", description: "管理员确认协助组织活动。", points: 40, status: "active", sort_order: 130 },
-  { rule_key: "positive_feedback", label: "获得正向协作反馈", description: "来自项目主理人或管理员的正向反馈。", points: 10, status: "active", sort_order: 140 },
+  { rule_key: "join_project", label: "被项目接受参与", description: "成员状态正式变为 active 时获得。", points: 20, status: "active", sort_order: 70 },
+  { rule_key: "complete_project_task", label: "完成一次项目任务", description: "项目结案时由管理员按成员勾选，默认勾选。", points: 15, status: "active", sort_order: 80 },
+  { rule_key: "project_completed_member", label: "参与项目顺利完成", description: "后台正式结案时，项目 active 成员获得。", points: 50, status: "active", sort_order: 90 },
+  { rule_key: "project_completed_lead", label: "主理项目顺利完成", description: "后台正式结案时，项目主理人获得。", points: 120, status: "active", sort_order: 100 },
+  { rule_key: "attend_event", label: "报名一次活动", description: "报名成功或付费活动付款确认后获得。", points: 8, status: "active", sort_order: 110 },
+  { rule_key: "pass_review", label: "通过社区认证", description: "首次获得任一社区认证徽章，全平台仅一次。", points: 30, status: "active", sort_order: 120 },
+  { rule_key: "positive_feedback", label: "获得正向协作反馈", description: "项目评价为正向且平均评分不低于 6 分。", points: 10, status: "active", sort_order: 140 },
 ];
 
 function createSessionToken(account) {
